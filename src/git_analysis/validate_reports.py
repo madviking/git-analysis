@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 
@@ -21,10 +22,13 @@ def sum_language_totals(languages: dict) -> tuple[int, int, int]:
     return ins, dele, changed
 
 
-def main(argv: list[str]) -> int:
+def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
     ap = argparse.ArgumentParser(description="Sanity-check git-analysis report outputs.")
     ap.add_argument("--reports", type=Path, default=Path("reports"), help="Reports directory.")
     ap.add_argument("--years", type=int, nargs="*", default=[], help="Optional years to check (default: infer).")
+    ap.add_argument("--periods", type=str, nargs="*", default=[], help="Optional period labels to check (default: infer).")
     args = ap.parse_args(argv)
 
     reports = args.reports
@@ -33,22 +37,36 @@ def main(argv: list[str]) -> int:
 
     summaries = sorted(reports.glob("year_*_summary.json"))
     if not summaries:
+        latest = reports / "latest.txt"
+        if latest.exists():
+            rel = latest.read_text(encoding="utf-8").strip()
+            if rel:
+                candidate = (reports / rel).resolve()
+                if candidate.exists():
+                    reports = candidate
+                    summaries = sorted(reports.glob("year_*_summary.json"))
+    if not summaries:
         raise SystemExit(f"No summary JSON files in: {reports}")
 
-    years: list[int] = []
+    labels: list[str] = []
     for p in summaries:
-        try:
-            y = int(p.stem.split("_")[1])
-        except Exception:
+        stem = p.stem
+        if not stem.startswith("year_") or not stem.endswith("_summary"):
             continue
-        years.append(y)
-    years = sorted(set(years))
+        label = stem[len("year_") : -len("_summary")]
+        if label:
+            labels.append(label)
+    labels = sorted(set(labels))
     if args.years:
-        years = [y for y in years if y in set(args.years)]
+        wanted = {str(y) for y in args.years}
+        labels = [l for l in labels if l in wanted]
+    if args.periods:
+        wanted = {str(p) for p in args.periods}
+        labels = [l for l in labels if l in wanted]
 
     ok = True
-    for year in years:
-        summary_path = reports / f"year_{year}_summary.json"
+    for label in labels:
+        summary_path = reports / f"year_{label}_summary.json"
         if not summary_path.exists():
             print(f"[WARN] missing {summary_path}")
             ok = False
@@ -63,7 +81,7 @@ def main(argv: list[str]) -> int:
         dele = int(agg.get("deletions_total", 0))
         changed = int(agg.get("changed_total", 0))
 
-        print(f"== {year} ==")
+        print(f"== {label} ==")
         print(f"- aggregate insertions/deletions/changed: {ins}/{dele}/{changed}")
         print(f"- languages insertions/deletions/changed: {ins_l}/{del_l}/{ch_l}")
 
@@ -77,6 +95,4 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    import sys
-
     raise SystemExit(main(sys.argv[1:]))

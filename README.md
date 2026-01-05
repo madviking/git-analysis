@@ -21,16 +21,17 @@ All output files go to `git-analysis/reports/`.
 
 - Python 3.11+
 - Git available on PATH
+- (Recommended) `uv` for `./cli.sh`
 
 ## Quick start
 
 ```bash
 cd git-analysis
-python3 -m venv .venv
-source .venv/bin/activate
+brew install uv  # or follow https://docs.astral.sh/uv/
 cp config.example.json config.json
-python analyze.py --root .. --years 2024 2025
+./cli.sh --root .. --years 2024 2025
 ```
+Reports are written under `reports/<run-type>/<timestamp>/` and `reports/latest.txt` points to the most recent run directory.
 
 ## Configuration (`config.json`)
 
@@ -85,6 +86,8 @@ CLI:
 Common:
 - `--root PATH`: directory to scan for repos (default `..`)
 - `--years 2024 2025`: which years to compute
+- `--periods 2025H1 2025H2`: analyze arbitrary periods (supports `YYYY`, `YYYYH1`, `YYYYH2`)
+- `--halves 2025`: shortcut for `2025H1` vs `2025H2`
 - `--jobs N`: parallel workers for `git` calls
 - `--max-repos N`: analyze only the first N unique repos (good for trial runs)
 
@@ -95,6 +98,7 @@ Behavior:
 
 ASCII output:
 - ASCII “Year in Review” reports are always generated to `reports/` (no flags required).
+- Use `--halves 2025` (or `--periods 2025H1 2025H2`) to compare first vs second half of a year.
 
 ## Output files
 
@@ -142,5 +146,5 @@ These files help explain why a repo did or didn’t make it into the analysis:
 Quick consistency check (language totals vs aggregate totals):
 
 ```bash
-python validate_reports.py --reports reports --years 2024 2025
+python -m git_analysis.validate_reports --reports reports --years 2024 2025
 ```

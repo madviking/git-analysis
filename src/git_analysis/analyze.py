@@ -13,384 +13,89 @@ import sys
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Optional
-from urllib.parse import urlparse
 
-
-@dataclasses.dataclass
-class AuthorStats:
-    name: str = ""
-    email: str = ""
-    commits: int = 0
-    insertions: int = 0
-    deletions: int = 0
-
-    @property
-    def changed(self) -> int:
-        return self.insertions + self.deletions
-
-
-@dataclasses.dataclass
-class RepoYearStats:
-    commits_total: int = 0
-    insertions_total: int = 0
-    deletions_total: int = 0
-    commits_me: int = 0
-    insertions_me: int = 0
-    deletions_me: int = 0
-
-    @property
-    def changed_total(self) -> int:
-        return self.insertions_total + self.deletions_total
-
-    @property
-    def changed_me(self) -> int:
-        return self.insertions_me + self.deletions_me
-
-
-@dataclasses.dataclass
-class RepoResult:
-    key: str
-    path: str
-    remote_name: str
-    remote: str
-    remote_canonical: str
-    duplicates: list[str]
-    first_commit_iso: str | None
-    first_commit_author_name: str | None
-    first_commit_author_email: str | None
-    last_commit_iso: str | None
-    year_stats_excl_bootstraps: dict[int, RepoYearStats]
-    year_stats_bootstraps: dict[int, RepoYearStats]
-    authors_by_year_excl_bootstraps: dict[int, dict[str, AuthorStats]]  # email -> stats
-    authors_by_year_bootstraps: dict[int, dict[str, AuthorStats]]  # email -> stats
-    languages_by_year_excl_bootstraps: dict[int, dict[str, dict[str, int]]]  # language -> {insertions,deletions}
-    languages_by_year_bootstraps: dict[int, dict[str, dict[str, int]]]  # language -> {insertions,deletions}
-    dirs_by_year_excl_bootstraps: dict[int, dict[str, dict[str, int]]]  # dir -> {insertions,deletions,insertions_me,deletions_me}
-    dirs_by_year_bootstraps: dict[int, dict[str, dict[str, int]]]  # dir -> {insertions,deletions,insertions_me,deletions_me}
-    excluded_by_year: dict[int, dict[str, int]]  # counters for excluded paths
-    bootstrap_commits_by_year: dict[int, list[dict[str, object]]]
-    errors: list[str]
+from .config import infer_me, load_config
+from .git import (
+    canonicalize_remote,
+    detect_fork,
+    discover_git_roots,
+    get_first_commit,
+    get_last_commit,
+    get_remote_origin,
+    get_remote_urls,
+    get_repo_toplevel,
+    remotes_included,
+    remote_included,
+    run_git,
+    select_remote,
+)
+from .identity import (
+    MeMatcher,
+    github_username_from_email,
+    normalize_email,
+    normalize_github_username,
+    normalize_name,
+)
+from .models import AuthorStats, BootstrapConfig, RepoResult, RepoYearStats
 
 
 @dataclasses.dataclass(frozen=True)
-class MeMatcher:
-    emails: frozenset[str]
-    names: frozenset[str]
-    email_globs: tuple[str, ...] = ()
-    name_globs: tuple[str, ...] = ()
-    github_usernames: frozenset[str] = frozenset()
+class Period:
+    label: str
+    start: dt.date  # inclusive
+    end: dt.date  # exclusive
 
-    def matches(self, author_name: str, author_email: str) -> bool:
-        email = normalize_email(author_email)
-        if email and email in self.emails:
-            return True
-        name = normalize_name(author_name)
-        if name and name in self.names:
-            return True
-        gh = github_username_from_email(email) if email else ""
-        if gh and gh in self.github_usernames:
-            return True
-        if name and name in self.github_usernames:
-            return True
-        if email:
-            for pat in self.email_globs:
-                if fnmatch.fnmatch(email, pat):
-                    return True
-        if name:
-            for pat in self.name_globs:
-                if fnmatch.fnmatch(name, pat):
-                    return True
-        return False
+    @property
+    def start_iso(self) -> str:
+        return self.start.isoformat()
+
+    @property
+    def end_iso(self) -> str:
+        return self.end.isoformat()
 
 
-@dataclasses.dataclass(frozen=True)
-class BootstrapConfig:
-    changed_threshold: int = 50_000
-    files_threshold: int = 200
-    addition_ratio: float = 0.90
-
-    def is_bootstrap(self, insertions: int, deletions: int, files_touched: int) -> bool:
-        changed = insertions + deletions
-        if changed < self.changed_threshold:
-            return False
-        if files_touched < self.files_threshold:
-            return False
-        if changed <= 0:
-            return False
-        ratio = insertions / changed
-        return ratio >= self.addition_ratio
+def parse_period(spec: str) -> Period:
+    s = (spec or "").strip()
+    if len(s) == 4 and s.isdigit():
+        year = int(s)
+        return Period(label=s, start=dt.date(year, 1, 1), end=dt.date(year + 1, 1, 1))
+    if len(s) == 6 and s[:4].isdigit() and s[4:].upper() in ("H1", "H2"):
+        year = int(s[:4])
+        half = s[4:].upper()
+        if half == "H1":
+            return Period(label=f"{year}H1", start=dt.date(year, 1, 1), end=dt.date(year, 7, 1))
+        return Period(label=f"{year}H2", start=dt.date(year, 7, 1), end=dt.date(year + 1, 1, 1))
+    raise ValueError(f"Invalid period: {spec!r} (expected YYYY, YYYYH1, or YYYYH2)")
 
 
-def run_git(args: list[str], cwd: Path, timeout_s: int = 300) -> tuple[int, str, str]:
-    proc = subprocess.run(
-        ["git", *args],
-        cwd=str(cwd),
-        capture_output=True,
-        text=True,
-        timeout=timeout_s,
-    )
-    return proc.returncode, proc.stdout, proc.stderr
-
-
-def load_config(config_path: Path) -> dict:
-    if not config_path.exists():
-        return {}
-    return json.loads(config_path.read_text(encoding="utf-8"))
-
-
-def infer_me() -> tuple[list[str], list[str]]:
-    emails: list[str] = []
-    names: list[str] = []
-
-    code, out, _ = run_git(["config", "--global", "--get", "user.email"], cwd=Path.cwd())
-    if code == 0 and out.strip():
-        emails.append(out.strip())
-
-    code, out, _ = run_git(["config", "--global", "--get", "user.name"], cwd=Path.cwd())
-    if code == 0 and out.strip():
-        names.append(out.strip())
-
-    return emails, names
-
-
-def normalize_email(email: str) -> str:
-    return email.strip().lower()
-
-
-def normalize_name(name: str) -> str:
-    return name.strip().casefold()
-
-
-def normalize_github_username(username: str) -> str:
-    return username.strip().lstrip("@").casefold()
-
-
-def github_username_from_email(email: str) -> str:
-    """
-    Extract GitHub username from GitHub noreply patterns:
-      - username@users.noreply.github.com
-      - 123456+username@users.noreply.github.com
-    Returns normalized username or "".
-    """
-    e = normalize_email(email)
-    if not e:
-        return ""
-    if not e.endswith("@users.noreply.github.com"):
-        return ""
-    local = e.split("@", 1)[0]
-    if "+" in local:
-        local = local.rsplit("+", 1)[-1]
-    return normalize_github_username(local)
-
-
-def discover_git_roots(root: Path, exclude_dirnames: set[str]) -> list[Path]:
-    roots: list[Path] = []
-
-    def onerror(err: OSError) -> None:
-        # Skip unreadable directories (common under large home dirs).
-        _ = err
-
-    for dirpath, dirnames, filenames in os.walk(root, onerror=onerror):
-        has_git = ".git" in dirnames or ".git" in filenames
-        if has_git:
-            roots.append(Path(dirpath))
-        # Prune traversal after detection so we can still spot `.git` dirs.
-        dirnames[:] = [d for d in dirnames if d not in exclude_dirnames and d != ".git"]
-    return roots
-
-
-def get_repo_toplevel(candidate: Path) -> Optional[Path]:
-    code, out, _ = run_git(["rev-parse", "--show-toplevel"], cwd=candidate)
-    if code != 0:
-        return None
-    try:
-        return Path(out.strip()).resolve()
-    except Exception:
-        return None
-
-
-def get_remote_origin(repo: Path) -> str:
-    code, out, _ = run_git(["config", "--get", "remote.origin.url"], cwd=repo)
-    if code == 0:
-        return out.strip()
-    return ""
-
-
-def canonicalize_remote(remote: str) -> str:
-    r = (remote or "").strip()
-    if not r:
-        return ""
-
-    # SCP-like syntax: git@github.com:org/repo.git
-    if "://" not in r and ":" in r and "@" in r.split(":", 1)[0]:
-        left, path = r.split(":", 1)
-        host = left.split("@", 1)[1]
-        canon = f"{host}/{path}"
-    else:
-        parsed = urlparse(r)
-        if parsed.scheme and parsed.netloc:
-            host = parsed.netloc
-            if "@" in host:
-                host = host.split("@", 1)[1]
-            canon = f"{host}/{parsed.path.lstrip('/')}"
+def slugify(s: str) -> str:
+    s = (s or "").strip()
+    out: list[str] = []
+    for ch in s:
+        if ch.isalnum() or ch in ("-", "_"):
+            out.append(ch)
+        elif ch in (" ", ".", ":", "/", "\\"):
+            out.append("-")
         else:
-            canon = r
-
-    canon = canon.rstrip("/")
-    if canon.endswith(".git"):
-        canon = canon[:-4]
-    return canon.lower()
-
-
-def remote_included(remote: str, include_prefixes: list[str]) -> bool:
-    if not include_prefixes:
-        return True
-    canon = canonicalize_remote(remote)
-    if not canon:
-        return False
-    for prefix in include_prefixes:
-        p = canonicalize_remote(prefix)
-        if not p:
-            continue
-        if canon == p or canon.startswith(p + "/"):
-            return True
-    return False
+            out.append("-")
+    slug = "".join(out).strip("-")
+    while "--" in slug:
+        slug = slug.replace("--", "-")
+    return slug or "run"
 
 
-def get_remote_urls(repo: Path) -> dict[str, str]:
-    # Example output lines: remote.origin.url https://github.com/org/repo.git
-    code, out, _ = run_git(["config", "--get-regexp", r"^remote\..*\.url$"], cwd=repo)
-    if code != 0:
-        return {}
-    remotes: dict[str, str] = {}
-    for line in out.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            key, url = line.split(None, 1)
-        except ValueError:
-            continue
-        if not key.startswith("remote.") or not key.endswith(".url"):
-            continue
-        name = key[len("remote.") : -len(".url")]
-        url = url.strip()
-        if name and url:
-            remotes[name] = url
-    return remotes
-
-
-def select_remote(
-    remotes: dict[str, str],
-    *,
-    include_prefixes: list[str],
-    priority: list[str],
-) -> tuple[str, str, str]:
-    """
-    Returns (remote_name, remote_url, remote_canonical).
-    Preference order:
-      1) remotes matching include_prefixes, by priority list then name
-      2) any remotes, by priority list then name
-    """
-    if not remotes:
-        return "", "", ""
-
-    def matches(url: str) -> bool:
-        return remote_included(url, include_prefixes) if include_prefixes else True
-
-    items = [(name, url, canonicalize_remote(url)) for name, url in remotes.items()]
-    matching = [t for t in items if matches(t[1])]
-    pool = matching if matching else items
-
-    prio_index = {name: i for i, name in enumerate(priority)}
-
-    def sort_key(t: tuple[str, str, str]) -> tuple[int, str]:
-        name = t[0]
-        return (prio_index.get(name, 10_000), name.lower())
-
-    name, url, canon = sorted(pool, key=sort_key)[0]
-    return name, url, canon
-
-
-def remotes_included(remotes: dict[str, str], include_prefixes: list[str], mode: str) -> bool:
-    if not include_prefixes:
-        return True
-    if not remotes:
-        return False
-    if mode == "primary":
-        # handled by select_remote at call site
-        return True
-    # default: any
-    return any(remote_included(url, include_prefixes) for url in remotes.values())
-
-
-def detect_fork(
-    remotes: dict[str, str],
-    *,
-    fork_remote_names: list[str],
-) -> tuple[bool, str]:
-    """
-    Heuristic: treat a repo as a fork if it has a "fork parent" remote (default: upstream)
-    and that remote points to a different canonical repo than origin (or the only other remote).
-    Returns (is_fork, fork_parent_canonical).
-    """
-    if not remotes:
-        return False, ""
-
-    parent_url = ""
-    for name in fork_remote_names:
-        if name in remotes and remotes[name].strip():
-            parent_url = remotes[name].strip()
-            break
-    if not parent_url:
-        return False, ""
-
-    parent_canon = canonicalize_remote(parent_url)
-    origin_canon = canonicalize_remote(remotes.get("origin", "")) if remotes.get("origin") else ""
-    if origin_canon and parent_canon and origin_canon != parent_canon:
-        return True, parent_canon
-
-    # If no origin, compare against any other remote.
-    for name, url in remotes.items():
-        if name in fork_remote_names:
-            continue
-        c = canonicalize_remote(url)
-        if c and parent_canon and c != parent_canon:
-            return True, parent_canon
-
-    return False, parent_canon
-
-
-def get_last_commit(repo: Path) -> tuple[str | None, int | None]:
-    code, out, _ = run_git(["log", "-n", "1", "--format=%aI\t%ct", "--all"], cwd=repo)
-    if code != 0:
-        return None, None
-    line = out.strip()
-    if not line:
-        return None, None
-    parts = line.split("\t", 1)
-    if len(parts) != 2:
-        return None, None
-    iso = parts[0].strip() or None
-    try:
-        ts = int(parts[1].strip())
-    except ValueError:
-        ts = None
-    return iso, ts
-
-
-def get_first_commit(repo: Path) -> tuple[str | None, str | None, str | None]:
-    code, out, _ = run_git(["log", "--reverse", "--format=%aI\t%an\t%ae", "-n", "1", "--all"], cwd=repo)
-    if code != 0:
-        return None, None, None
-    line = out.strip()
-    if not line:
-        return None, None, None
-    parts = line.split("\t", 2)
-    if len(parts) != 3:
-        return None, None, None
-    return parts[0], parts[1], parts[2]
+def run_type_from_args(args: argparse.Namespace, periods: list[Period]) -> str:
+    labels = [p.label for p in periods]
+    if getattr(args, "halves", 0):
+        return f"halves_{int(args.halves)}"
+    if getattr(args, "periods", None):
+        if len(labels) == 2:
+            return f"compare_{labels[0]}_vs_{labels[1]}"
+        return "periods_" + "_".join(labels)
+    # default: years
+    if len(labels) == 2:
+        return f"compare_{labels[0]}_vs_{labels[1]}"
+    return "years_" + "_".join(labels)
 
 
 def should_exclude_path(path: str, exclude_prefixes: list[str], exclude_globs: list[str]) -> bool:
@@ -501,11 +206,11 @@ def add_repo_year_stats(dst: RepoYearStats, src: RepoYearStats) -> None:
     dst.deletions_me += src.deletions_me
 
 
-def repo_year_stats(r: RepoResult, year: int, include_bootstraps: bool) -> RepoYearStats:
+def repo_period_stats(r: RepoResult, period_label: str, include_bootstraps: bool) -> RepoYearStats:
     out = RepoYearStats()
-    add_repo_year_stats(out, r.year_stats_excl_bootstraps.get(year, RepoYearStats()))
+    add_repo_year_stats(out, r.period_stats_excl_bootstraps.get(period_label, RepoYearStats()))
     if include_bootstraps:
-        add_repo_year_stats(out, r.year_stats_bootstraps.get(year, RepoYearStats()))
+        add_repo_year_stats(out, r.period_stats_bootstraps.get(period_label, RepoYearStats()))
     return out
 
 
@@ -536,7 +241,7 @@ def merge_author_stats(dst: dict[str, AuthorStats], src: dict[str, AuthorStats])
 
 def parse_numstat_stream(
     repo: Path,
-    year: int,
+    period: Period,
     include_merges: bool,
     me: MeMatcher,
     bootstrap: BootstrapConfig,
@@ -555,8 +260,8 @@ def parse_numstat_stream(
     list[dict[str, object]],  # bootstrap commits
     list[str],  # errors
 ]:
-    start = f"{year}-01-01"
-    end = f"{year + 1}-01-01"
+    start = period.start_iso
+    end = period.end_iso
 
     pretty = "@@@%H\t%an\t%ae\t%aI\t%s"
     cmd = [
@@ -781,7 +486,7 @@ def analyze_repo(
     remote: str,
     remote_canonical: str,
     duplicates: list[str],
-    years: list[int],
+    periods: list[Period],
     include_merges: bool,
     me: MeMatcher,
     bootstrap: BootstrapConfig,
@@ -793,18 +498,18 @@ def analyze_repo(
     first_iso, first_name, first_email = get_first_commit(repo)
     last_iso, _ = get_last_commit(repo)
 
-    year_stats_excl: dict[int, RepoYearStats] = {}
-    year_stats_boot: dict[int, RepoYearStats] = {}
-    authors_by_year_excl: dict[int, dict[str, AuthorStats]] = {}
-    authors_by_year_boot: dict[int, dict[str, AuthorStats]] = {}
-    languages_by_year_excl: dict[int, dict[str, dict[str, int]]] = {}
-    languages_by_year_boot: dict[int, dict[str, dict[str, int]]] = {}
-    dirs_by_year_excl: dict[int, dict[str, dict[str, int]]] = {}
-    dirs_by_year_boot: dict[int, dict[str, dict[str, int]]] = {}
-    excluded_by_year: dict[int, dict[str, int]] = {}
-    bootstrap_commits_by_year: dict[int, list[dict[str, object]]] = {}
+    period_stats_excl: dict[str, RepoYearStats] = {}
+    period_stats_boot: dict[str, RepoYearStats] = {}
+    authors_by_period_excl: dict[str, dict[str, AuthorStats]] = {}
+    authors_by_period_boot: dict[str, dict[str, AuthorStats]] = {}
+    languages_by_period_excl: dict[str, dict[str, dict[str, int]]] = {}
+    languages_by_period_boot: dict[str, dict[str, dict[str, int]]] = {}
+    dirs_by_period_excl: dict[str, dict[str, dict[str, int]]] = {}
+    dirs_by_period_boot: dict[str, dict[str, dict[str, int]]] = {}
+    excluded_by_period: dict[str, dict[str, int]] = {}
+    bootstrap_commits_by_period: dict[str, list[dict[str, object]]] = {}
 
-    for year in years:
+    for period in periods:
         (
             stats_excl_boot,
             stats_boot_only,
@@ -819,23 +524,23 @@ def analyze_repo(
             errs,
         ) = parse_numstat_stream(
             repo=repo,
-            year=year,
+            period=period,
             include_merges=include_merges,
             me=me,
             bootstrap=bootstrap,
             exclude_path_prefixes=exclude_path_prefixes,
             exclude_path_globs=exclude_path_globs,
         )
-        year_stats_excl[year] = stats_excl_boot
-        year_stats_boot[year] = stats_boot_only
-        authors_by_year_excl[year] = authors_excl_boot
-        authors_by_year_boot[year] = authors_boot_only
-        languages_by_year_excl[year] = langs_excl_boot
-        languages_by_year_boot[year] = langs_boot_only
-        dirs_by_year_excl[year] = dirs_excl_boot
-        dirs_by_year_boot[year] = dirs_boot_only
-        excluded_by_year[year] = excluded
-        bootstrap_commits_by_year[year] = boot_commits
+        period_stats_excl[period.label] = stats_excl_boot
+        period_stats_boot[period.label] = stats_boot_only
+        authors_by_period_excl[period.label] = authors_excl_boot
+        authors_by_period_boot[period.label] = authors_boot_only
+        languages_by_period_excl[period.label] = langs_excl_boot
+        languages_by_period_boot[period.label] = langs_boot_only
+        dirs_by_period_excl[period.label] = dirs_excl_boot
+        dirs_by_period_boot[period.label] = dirs_boot_only
+        excluded_by_period[period.label] = excluded
+        bootstrap_commits_by_period[period.label] = boot_commits
         errors.extend(errs)
 
     return RepoResult(
@@ -849,16 +554,16 @@ def analyze_repo(
         first_commit_author_name=first_name,
         first_commit_author_email=first_email,
         last_commit_iso=last_iso,
-        year_stats_excl_bootstraps=year_stats_excl,
-        year_stats_bootstraps=year_stats_boot,
-        authors_by_year_excl_bootstraps=authors_by_year_excl,
-        authors_by_year_bootstraps=authors_by_year_boot,
-        languages_by_year_excl_bootstraps=languages_by_year_excl,
-        languages_by_year_bootstraps=languages_by_year_boot,
-        dirs_by_year_excl_bootstraps=dirs_by_year_excl,
-        dirs_by_year_bootstraps=dirs_by_year_boot,
-        excluded_by_year=excluded_by_year,
-        bootstrap_commits_by_year=bootstrap_commits_by_year,
+        period_stats_excl_bootstraps=period_stats_excl,
+        period_stats_bootstraps=period_stats_boot,
+        authors_by_period_excl_bootstraps=authors_by_period_excl,
+        authors_by_period_bootstraps=authors_by_period_boot,
+        languages_by_period_excl_bootstraps=languages_by_period_excl,
+        languages_by_period_bootstraps=languages_by_period_boot,
+        dirs_by_period_excl_bootstraps=dirs_by_period_excl,
+        dirs_by_period_bootstraps=dirs_by_period_boot,
+        excluded_by_period=excluded_by_period,
+        bootstrap_commits_by_period=bootstrap_commits_by_period,
         errors=errors,
     )
 
@@ -909,7 +614,7 @@ def write_repo_selection_summary(path: Path, rows: list[dict[str, str]]) -> None
     write_json(path, summary)
 
 
-def write_repos_csv(path: Path, repos: list[RepoResult], year: int, me: MeMatcher) -> None:
+def write_repos_csv(path: Path, repos: list[RepoResult], period_label: str, me: MeMatcher) -> None:
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(
@@ -938,9 +643,9 @@ def write_repos_csv(path: Path, repos: list[RepoResult], year: int, me: MeMatche
             ]
         )
         for r in repos:
-            ys_excl = r.year_stats_excl_bootstraps.get(year, RepoYearStats())
-            ys_boot = r.year_stats_bootstraps.get(year, RepoYearStats())
-            ys_incl = repo_year_stats(r, year, include_bootstraps=True)
+            ys_excl = r.period_stats_excl_bootstraps.get(period_label, RepoYearStats())
+            ys_boot = r.period_stats_bootstraps.get(period_label, RepoYearStats())
+            ys_incl = repo_period_stats(r, period_label, include_bootstraps=True)
             first_by_me = False
             if r.first_commit_author_name and r.first_commit_author_email:
                 first_by_me = me.matches(r.first_commit_author_name, r.first_commit_author_email)
@@ -995,7 +700,7 @@ def write_authors_csv(
 
 def aggregate_authors(
     repos: list[RepoResult],
-    year: int,
+    period_label: str,
     *,
     include_bootstraps: bool,
     bootstraps_only: bool = False,
@@ -1003,17 +708,17 @@ def aggregate_authors(
     agg: dict[str, AuthorStats] = {}
     for r in repos:
         if bootstraps_only:
-            merge_author_stats(agg, r.authors_by_year_bootstraps.get(year, {}))
+            merge_author_stats(agg, r.authors_by_period_bootstraps.get(period_label, {}))
         else:
-            merge_author_stats(agg, r.authors_by_year_excl_bootstraps.get(year, {}))
+            merge_author_stats(agg, r.authors_by_period_excl_bootstraps.get(period_label, {}))
             if include_bootstraps:
-                merge_author_stats(agg, r.authors_by_year_bootstraps.get(year, {}))
+                merge_author_stats(agg, r.authors_by_period_bootstraps.get(period_label, {}))
     return agg
 
 
-def aggregate_year(
+def aggregate_period(
     repos: list[RepoResult],
-    year: int,
+    period: Period,
     me: MeMatcher,
     *,
     include_bootstraps: bool,
@@ -1027,9 +732,9 @@ def aggregate_year(
 
     for r in repos:
         if bootstraps_only:
-            ys = r.year_stats_bootstraps.get(year, RepoYearStats())
+            ys = r.period_stats_bootstraps.get(period.label, RepoYearStats())
         else:
-            ys = repo_year_stats(r, year, include_bootstraps=include_bootstraps)
+            ys = repo_period_stats(r, period.label, include_bootstraps=include_bootstraps)
         if ys.commits_total > 0:
             repos_with_commits += 1
         if ys.commits_me > 0:
@@ -1037,10 +742,10 @@ def aggregate_year(
 
         if r.first_commit_iso:
             try:
-                first_year = int(r.first_commit_iso[:4])
+                first_date = dt.date.fromisoformat(r.first_commit_iso[:10])
             except ValueError:
-                first_year = None
-            if first_year == year:
+                first_date = None
+            if first_date is not None and (period.start <= first_date < period.end):
                 new_projects_by_history += 1
                 if r.first_commit_author_name and r.first_commit_author_email:
                     if me.matches(r.first_commit_author_name, r.first_commit_author_email):
@@ -1053,8 +758,10 @@ def aggregate_year(
         total.insertions_me += ys.insertions_me
         total.deletions_me += ys.deletions_me
 
-    return {
-        "year": year,
+    out: dict[str, object] = {
+        "period": period.label,
+        "start": period.start_iso,
+        "end": period.end_iso,
         "repos_total": len(repos),
         "repos_with_commits": repos_with_commits,
         "repos_with_my_commits": repos_with_my_commits,
@@ -1073,11 +780,14 @@ def aggregate_year(
         "deletions_others": total.deletions_total - total.deletions_me,
         "changed_others": total.changed_total - total.changed_me,
     }
+    if period.label.isdigit() and len(period.label) == 4:
+        out["year"] = int(period.label)
+    return out
 
 
 def aggregate_languages(
     repos: list[RepoResult],
-    year: int,
+    period_label: str,
     *,
     include_bootstraps: bool,
     bootstraps_only: bool = False,
@@ -1085,11 +795,11 @@ def aggregate_languages(
     agg: dict[str, dict[str, int]] = defaultdict(lambda: {"insertions": 0, "deletions": 0, "insertions_me": 0, "deletions_me": 0})
     for r in repos:
         if bootstraps_only:
-            merge_breakdown(agg, r.languages_by_year_bootstraps.get(year, {}))
+            merge_breakdown(agg, r.languages_by_period_bootstraps.get(period_label, {}))
         else:
-            merge_breakdown(agg, r.languages_by_year_excl_bootstraps.get(year, {}))
+            merge_breakdown(agg, r.languages_by_period_excl_bootstraps.get(period_label, {}))
             if include_bootstraps:
-                merge_breakdown(agg, r.languages_by_year_bootstraps.get(year, {}))
+                merge_breakdown(agg, r.languages_by_period_bootstraps.get(period_label, {}))
 
     # Convert to plain dicts with derived fields.
     out: dict[str, dict[str, int]] = {}
@@ -1114,7 +824,7 @@ def aggregate_languages(
 
 def aggregate_dirs(
     repos: list[RepoResult],
-    year: int,
+    period_label: str,
     *,
     include_bootstraps: bool,
     bootstraps_only: bool = False,
@@ -1122,11 +832,11 @@ def aggregate_dirs(
     agg: dict[str, dict[str, int]] = defaultdict(lambda: {"insertions": 0, "deletions": 0, "insertions_me": 0, "deletions_me": 0})
     for r in repos:
         if bootstraps_only:
-            merge_breakdown(agg, r.dirs_by_year_bootstraps.get(year, {}))
+            merge_breakdown(agg, r.dirs_by_period_bootstraps.get(period_label, {}))
         else:
-            merge_breakdown(agg, r.dirs_by_year_excl_bootstraps.get(year, {}))
+            merge_breakdown(agg, r.dirs_by_period_excl_bootstraps.get(period_label, {}))
             if include_bootstraps:
-                merge_breakdown(agg, r.dirs_by_year_bootstraps.get(year, {}))
+                merge_breakdown(agg, r.dirs_by_period_bootstraps.get(period_label, {}))
 
     out: dict[str, dict[str, int]] = {}
     for d, st in agg.items():
@@ -1148,10 +858,10 @@ def aggregate_dirs(
     return out
 
 
-def aggregate_excluded(repos: list[RepoResult], year: int) -> dict[str, int]:
+def aggregate_excluded(repos: list[RepoResult], period_label: str) -> dict[str, int]:
     agg: dict[str, int] = defaultdict(int)
     for r in repos:
-        ex = r.excluded_by_year.get(year, {})
+        ex = r.excluded_by_period.get(period_label, {})
         for k, v in ex.items():
             agg[k] += int(v)
     return dict(agg)
@@ -1225,10 +935,10 @@ def write_dirs_csv(path: Path, dirs: dict[str, dict[str, int]]) -> None:
             )
 
 
-def write_bootstrap_commits_csv(path: Path, repos: list[RepoResult], year: int) -> None:
+def write_bootstrap_commits_csv(path: Path, repos: list[RepoResult], period_label: str) -> None:
     rows: list[dict[str, object]] = []
     for r in repos:
-        for c in r.bootstrap_commits_by_year.get(year, []):
+        for c in r.bootstrap_commits_by_period.get(period_label, []):
             row = dict(c)
             row["repo_path"] = r.path
             row["repo_key"] = r.key
@@ -1278,29 +988,34 @@ def write_bootstrap_commits_csv(path: Path, repos: list[RepoResult], year: int) 
             )
 
 
-def write_repo_activity_csv(path: Path, repos: list[RepoResult], years: list[int]) -> None:
-    years = sorted(set(int(y) for y in years))
+def write_repo_activity_csv(path: Path, repos: list[RepoResult], period_labels: list[str]) -> None:
+    seen: set[str] = set()
+    labels: list[str] = []
+    for p in period_labels:
+        if p not in seen:
+            seen.add(p)
+            labels.append(p)
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         header = ["repo_path", "repo_key", "remote_canonical", "remote_name", "remote_origin"]
-        for y in years:
+        for label in labels:
             header.extend(
                 [
-                    f"commits_excl_bootstraps_{y}",
-                    f"commits_bootstraps_{y}",
-                    f"commits_including_bootstraps_{y}",
-                    f"changed_excl_bootstraps_{y}",
-                    f"changed_bootstraps_{y}",
-                    f"changed_including_bootstraps_{y}",
+                    f"commits_excl_bootstraps_{label}",
+                    f"commits_bootstraps_{label}",
+                    f"commits_including_bootstraps_{label}",
+                    f"changed_excl_bootstraps_{label}",
+                    f"changed_bootstraps_{label}",
+                    f"changed_including_bootstraps_{label}",
                 ]
             )
         writer.writerow(header)
         for r in repos:
             row = [r.path, r.key, r.remote_canonical, r.remote_name, r.remote]
-            for y in years:
-                ys_excl = r.year_stats_excl_bootstraps.get(y, RepoYearStats())
-                ys_boot = r.year_stats_bootstraps.get(y, RepoYearStats())
-                ys_incl = repo_year_stats(r, y, include_bootstraps=True)
+            for label in labels:
+                ys_excl = r.period_stats_excl_bootstraps.get(label, RepoYearStats())
+                ys_boot = r.period_stats_bootstraps.get(label, RepoYearStats())
+                ys_incl = repo_period_stats(r, label, include_bootstraps=True)
                 row.extend(
                     [
                         ys_excl.commits_total,
@@ -1350,7 +1065,7 @@ def repo_label(r: RepoResult) -> str:
 
 def render_year_in_review(
     *,
-    year: int,
+    period: Period,
     year_agg: dict,
     year_agg_bootstraps: dict,
     languages: dict[str, dict[str, int]],
@@ -1371,7 +1086,8 @@ def render_year_in_review(
     lines: list[str] = []
     lines.append(YEAR_IN_REVIEW_BANNER)
     lines.append("")
-    lines.append(f"YEAR IN REVIEW: {year}")
+    lines.append(f"YEAR IN REVIEW: {period.label}")
+    lines.append(f"Range: {period.start_iso} -> {period.end_iso} (exclusive end)")
     lines.append("")
     lines.append(f"Repos analyzed: {fmt_int(int(year_agg.get('repos_total', 0)))} (dedupe={dedupe}, merges={'yes' if include_merges else 'no'}, refs=all)")
     lines.append(
@@ -1453,7 +1169,7 @@ def render_year_in_review(
     lines.append("-" * 72)
     repo_items: list[tuple[int, RepoResult]] = []
     for r in repos:
-        ys = repo_year_stats(r, year, include_bootstraps=include_bootstraps)
+        ys = repo_period_stats(r, period.label, include_bootstraps=include_bootstraps)
         repo_items.append((ys.changed_total, r))
     repo_items.sort(key=lambda t: (-t[0], repo_label(t[1]).lower()))
     max_repo = repo_items[0][0] if repo_items else 0
@@ -1484,8 +1200,8 @@ def render_year_in_review(
 
 def render_yoy_year_in_review(
     *,
-    year0: int,
-    year1: int,
+    period0: Period,
+    period1: Period,
     agg0: dict,
     agg1: dict,
     langs0: dict[str, dict[str, int]],
@@ -1502,7 +1218,8 @@ def render_yoy_year_in_review(
     lines: list[str] = []
     lines.append(YEAR_IN_REVIEW_BANNER)
     lines.append("")
-    lines.append(f"YEAR IN REVIEW: {year0} -> {year1}")
+    lines.append(f"YEAR IN REVIEW: {period0.label} -> {period1.label}")
+    lines.append(f"Range: {period0.start_iso}->{period0.end_iso} vs {period1.start_iso}->{period1.end_iso}")
     lines.append("")
     lines.append("Year-over-year totals")
     lines.append("-" * 72)
@@ -1558,8 +1275,8 @@ def write_comparison_md(
     top_languages: int = 15,
     top_dirs: int = 20,
 ) -> None:
-    a = y0["year"]
-    b = y1["year"]
+    a = str(y0.get("period") or y0.get("year"))
+    b = str(y1.get("period") or y1.get("year"))
 
     lines: list[str] = []
     lines.append(f"# Git comparison: {a} → {b}")
@@ -1745,6 +1462,8 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Aggregate yearly git stats across many repos.")
     parser.add_argument("--root", type=Path, default=Path(".."), help="Root directory to scan for git repos.")
     parser.add_argument("--years", type=int, nargs="+", default=[2024, 2025], help="Years to analyze.")
+    parser.add_argument("--periods", type=str, nargs="+", default=None, help="Periods to analyze (YYYY, YYYYH1, YYYYH2).")
+    parser.add_argument("--halves", type=int, default=0, help="Shortcut for comparing H1 vs H2 of a year (e.g. --halves 2025).")
     parser.add_argument("--config", type=Path, default=Path("config.json"), help="Path to config.json.")
     parser.add_argument("--include-merges", action="store_true", help="Include merge commits in stats.")
     parser.add_argument("--dedupe", choices=["remote", "path"], default="remote", help="Dedupe repos by remote or by path.")
@@ -1753,6 +1472,21 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--top-authors", type=int, default=25, help="Top authors to include in JSON summary.")
     parser.add_argument("--include-bootstraps", action="store_true", help="Include detected bootstrap/import commits in main stats.")
     args = parser.parse_args(argv)
+
+    if args.periods:
+        periods = [parse_period(s) for s in args.periods]
+    elif int(args.halves) > 0:
+        y = int(args.halves)
+        periods = [parse_period(f"{y}H1"), parse_period(f"{y}H2")]
+    else:
+        years = sorted(set(int(y) for y in args.years))
+        periods = [parse_period(str(y)) for y in years]
+
+    seen_labels: set[str] = set()
+    for p in periods:
+        if p.label in seen_labels:
+            raise SystemExit(f"Duplicate period label: {p.label}")
+        seen_labels.add(p.label)
 
     config = load_config(args.config)
     me_emails_cfg = list(config.get("me_emails", []) or [])
@@ -1783,6 +1517,7 @@ def main(argv: list[str]) -> int:
             ".git",
             ".venv",
             "git-analysis",
+            "reports",
             "node_modules",
             "vendor",
             "dist",
@@ -1811,8 +1546,19 @@ def main(argv: list[str]) -> int:
     include_bootstraps = bool(args.include_bootstraps)
 
     scan_root = args.root.resolve()
-    report_dir = Path("reports").resolve()
+    reports_root = Path("reports").resolve()
+    ensure_dir(reports_root)
+
+    run_type = slugify(run_type_from_args(args, periods))
+    timestamp = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    report_dir = reports_root / run_type / timestamp
     ensure_dir(report_dir)
+
+    # Convenience pointer for scripts/validation.
+    try:
+        (reports_root / "latest.txt").write_text(str(report_dir.relative_to(reports_root)) + "\n", encoding="utf-8")
+    except Exception:
+        pass
 
     candidates = discover_git_roots(scan_root, exclude_dirnames)
 
@@ -1957,9 +1703,7 @@ def main(argv: list[str]) -> int:
 
     print(f"Found {len(candidates)} repo roots; analyzing {len(repos_to_analyze)} unique repos (dedupe={args.dedupe}).")
     if not me.emails and not me.names and not me.email_globs and not me.name_globs and not me.github_usernames:
-        print("Warning: could not infer 'me' identity; set git-analysis/config.json to get per-user stats.")
-
-    years = sorted(set(args.years))
+        print("Warning: could not infer 'me' identity; set config.json to get per-user stats.")
 
     results: list[RepoResult] = []
     with ThreadPoolExecutor(max_workers=args.jobs) as ex:
@@ -1974,7 +1718,7 @@ def main(argv: list[str]) -> int:
                     remote,
                     remote_canonical,
                     dups,
-                    years,
+                    periods,
                     args.include_merges,
                     me,
                     bootstrap_cfg,
@@ -1995,54 +1739,55 @@ def main(argv: list[str]) -> int:
     generated_at = dt.datetime.now(tz=dt.timezone.utc).isoformat()
     write_repo_selection_csv(report_dir / "repo_selection.csv", selection_rows)
     write_repo_selection_summary(report_dir / "repo_selection_summary.json", selection_rows)
-    year_aggs_excl: dict[int, dict] = {}
-    year_aggs_boot: dict[int, dict] = {}
-    year_aggs_incl: dict[int, dict] = {}
-    year_langs_excl: dict[int, dict[str, dict[str, int]]] = {}
-    year_langs_boot: dict[int, dict[str, dict[str, int]]] = {}
-    year_langs_incl: dict[int, dict[str, dict[str, int]]] = {}
-    year_dirs_excl: dict[int, dict[str, dict[str, int]]] = {}
-    year_dirs_boot: dict[int, dict[str, dict[str, int]]] = {}
-    year_dirs_incl: dict[int, dict[str, dict[str, int]]] = {}
-    year_authors_excl: dict[int, dict[str, AuthorStats]] = {}
-    year_authors_boot: dict[int, dict[str, AuthorStats]] = {}
-    year_authors_incl: dict[int, dict[str, AuthorStats]] = {}
+    period_aggs_excl: dict[str, dict] = {}
+    period_aggs_boot: dict[str, dict] = {}
+    period_aggs_incl: dict[str, dict] = {}
+    period_langs_excl: dict[str, dict[str, dict[str, int]]] = {}
+    period_langs_boot: dict[str, dict[str, dict[str, int]]] = {}
+    period_langs_incl: dict[str, dict[str, dict[str, int]]] = {}
+    period_dirs_excl: dict[str, dict[str, dict[str, int]]] = {}
+    period_dirs_boot: dict[str, dict[str, dict[str, int]]] = {}
+    period_dirs_incl: dict[str, dict[str, dict[str, int]]] = {}
+    period_authors_excl: dict[str, dict[str, AuthorStats]] = {}
+    period_authors_boot: dict[str, dict[str, AuthorStats]] = {}
+    period_authors_incl: dict[str, dict[str, AuthorStats]] = {}
     ascii_top_n = 10
-    for year in years:
-        year_agg_excl = aggregate_year(results, year, me, include_bootstraps=False)
-        year_agg_boot = aggregate_year(results, year, me, include_bootstraps=False, bootstraps_only=True)
-        year_agg_incl = aggregate_year(results, year, me, include_bootstraps=True)
+    for period in periods:
+        label = period.label
+        agg_excl = aggregate_period(results, period, me, include_bootstraps=False)
+        agg_boot = aggregate_period(results, period, me, include_bootstraps=False, bootstraps_only=True)
+        agg_incl = aggregate_period(results, period, me, include_bootstraps=True)
 
-        authors_excl = aggregate_authors(results, year, include_bootstraps=False)
-        authors_boot = aggregate_authors(results, year, include_bootstraps=False, bootstraps_only=True)
-        authors_incl = aggregate_authors(results, year, include_bootstraps=True)
+        authors_excl = aggregate_authors(results, label, include_bootstraps=False)
+        authors_boot = aggregate_authors(results, label, include_bootstraps=False, bootstraps_only=True)
+        authors_incl = aggregate_authors(results, label, include_bootstraps=True)
 
-        languages_excl = aggregate_languages(results, year, include_bootstraps=False)
-        languages_boot = aggregate_languages(results, year, include_bootstraps=False, bootstraps_only=True)
-        languages_incl = aggregate_languages(results, year, include_bootstraps=True)
+        languages_excl = aggregate_languages(results, label, include_bootstraps=False)
+        languages_boot = aggregate_languages(results, label, include_bootstraps=False, bootstraps_only=True)
+        languages_incl = aggregate_languages(results, label, include_bootstraps=True)
 
-        dirs_excl = aggregate_dirs(results, year, include_bootstraps=False)
-        dirs_boot = aggregate_dirs(results, year, include_bootstraps=False, bootstraps_only=True)
-        dirs_incl = aggregate_dirs(results, year, include_bootstraps=True)
+        dirs_excl = aggregate_dirs(results, label, include_bootstraps=False)
+        dirs_boot = aggregate_dirs(results, label, include_bootstraps=False, bootstraps_only=True)
+        dirs_incl = aggregate_dirs(results, label, include_bootstraps=True)
 
-        year_aggs_excl[year] = year_agg_excl
-        year_aggs_boot[year] = year_agg_boot
-        year_aggs_incl[year] = year_agg_incl
-        year_langs_excl[year] = languages_excl
-        year_langs_boot[year] = languages_boot
-        year_langs_incl[year] = languages_incl
-        year_dirs_excl[year] = dirs_excl
-        year_dirs_boot[year] = dirs_boot
-        year_dirs_incl[year] = dirs_incl
-        year_authors_excl[year] = authors_excl
-        year_authors_boot[year] = authors_boot
-        year_authors_incl[year] = authors_incl
+        period_aggs_excl[label] = agg_excl
+        period_aggs_boot[label] = agg_boot
+        period_aggs_incl[label] = agg_incl
+        period_langs_excl[label] = languages_excl
+        period_langs_boot[label] = languages_boot
+        period_langs_incl[label] = languages_incl
+        period_dirs_excl[label] = dirs_excl
+        period_dirs_boot[label] = dirs_boot
+        period_dirs_incl[label] = dirs_incl
+        period_authors_excl[label] = authors_excl
+        period_authors_boot[label] = authors_boot
+        period_authors_incl[label] = authors_incl
 
-        year_agg = year_agg_incl if include_bootstraps else year_agg_excl
+        agg = agg_incl if include_bootstraps else agg_excl
         authors_agg = authors_incl if include_bootstraps else authors_excl
         languages_agg = languages_incl if include_bootstraps else languages_excl
         dirs_agg = dirs_incl if include_bootstraps else dirs_excl
-        excluded_agg = aggregate_excluded(results, year)
+        excluded_agg = aggregate_excluded(results, label)
 
         top_authors = sorted(authors_agg.values(), key=lambda s: (-s.commits, -s.changed, s.email.lower()))[: args.top_authors]
         top_dirs = dict(
@@ -2051,7 +1796,9 @@ def main(argv: list[str]) -> int:
         summary = {
             "generated_at": generated_at,
             "root": str(scan_root),
-            "year": year,
+            "period": label,
+            "start": period.start_iso,
+            "end": period.end_iso,
             "dedupe": args.dedupe,
             "max_repos": int(args.max_repos),
             "include_merges": bool(args.include_merges),
@@ -2075,10 +1822,10 @@ def main(argv: list[str]) -> int:
                 "name_globs": list(me.name_globs),
                 "github_usernames": sorted(me.github_usernames),
             },
-            "aggregate": year_agg,
-            "aggregate_excl_bootstraps": year_agg_excl,
-            "aggregate_bootstraps": year_agg_boot,
-            "aggregate_including_bootstraps": year_agg_incl,
+            "aggregate": agg,
+            "aggregate_excl_bootstraps": agg_excl,
+            "aggregate_bootstraps": agg_boot,
+            "aggregate_including_bootstraps": agg_incl,
             "languages": languages_agg,
             "excluded": excluded_agg,
             "dirs_top": top_dirs,
@@ -2099,23 +1846,25 @@ def main(argv: list[str]) -> int:
             ],
             "errors": [e for r in results for e in r.errors],
         }
+        if label.isdigit() and len(label) == 4:
+            summary["year"] = int(label)
 
-        write_json(report_dir / f"year_{year}_summary.json", summary)
-        write_repos_csv(report_dir / f"year_{year}_repos.csv", results, year, me)
-        write_authors_csv(report_dir / f"year_{year}_authors.csv", authors_agg, me)
-        write_languages_csv(report_dir / f"year_{year}_languages.csv", languages_agg)
-        write_dirs_csv(report_dir / f"year_{year}_dirs.csv", dirs_agg)
-        write_json(report_dir / f"year_{year}_excluded.json", excluded_agg)
-        write_bootstrap_commits_csv(report_dir / f"year_{year}_bootstraps_commits.csv", results, year)
-        write_authors_csv(report_dir / f"year_{year}_bootstraps_authors.csv", authors_boot, me)
-        write_languages_csv(report_dir / f"year_{year}_bootstraps_languages.csv", languages_boot)
-        write_dirs_csv(report_dir / f"year_{year}_bootstraps_dirs.csv", dirs_boot)
+        write_json(report_dir / f"year_{label}_summary.json", summary)
+        write_repos_csv(report_dir / f"year_{label}_repos.csv", results, label, me)
+        write_authors_csv(report_dir / f"year_{label}_authors.csv", authors_agg, me)
+        write_languages_csv(report_dir / f"year_{label}_languages.csv", languages_agg)
+        write_dirs_csv(report_dir / f"year_{label}_dirs.csv", dirs_agg)
+        write_json(report_dir / f"year_{label}_excluded.json", excluded_agg)
+        write_bootstrap_commits_csv(report_dir / f"year_{label}_bootstraps_commits.csv", results, label)
+        write_authors_csv(report_dir / f"year_{label}_bootstraps_authors.csv", authors_boot, me)
+        write_languages_csv(report_dir / f"year_{label}_bootstraps_languages.csv", languages_boot)
+        write_dirs_csv(report_dir / f"year_{label}_bootstraps_dirs.csv", dirs_boot)
 
-        (report_dir / f"year_in_review_{year}.txt").write_text(
+        (report_dir / f"year_in_review_{label}.txt").write_text(
             render_year_in_review(
-                year=year,
-                year_agg=year_agg,
-                year_agg_bootstraps=year_agg_boot,
+                period=period,
+                year_agg=agg,
+                year_agg_bootstraps=agg_boot,
                 languages=languages_agg,
                 dirs=dirs_agg,
                 excluded=excluded_agg,
@@ -2134,27 +1883,29 @@ def main(argv: list[str]) -> int:
             encoding="utf-8",
         )
 
-    write_repo_activity_csv(report_dir / "repo_activity.csv", results, years)
+    write_repo_activity_csv(report_dir / "repo_activity.csv", results, [p.label for p in periods])
 
-    # Comparison markdown (if exactly two years)
-    if len(years) == 2:
-        y0_excl = year_aggs_excl[years[0]]
-        y1_excl = year_aggs_excl[years[1]]
-        l0_excl = year_langs_excl[years[0]]
-        l1_excl = year_langs_excl[years[1]]
-        d0_excl = year_dirs_excl[years[0]]
-        d1_excl = year_dirs_excl[years[1]]
-        y0_boot = year_aggs_boot[years[0]]
-        y1_boot = year_aggs_boot[years[1]]
-        l0_boot = year_langs_boot[years[0]]
-        l1_boot = year_langs_boot[years[1]]
-        d0_boot = year_dirs_boot[years[0]]
-        d1_boot = year_dirs_boot[years[1]]
-        y0_incl = year_aggs_incl[years[0]]
-        y1_incl = year_aggs_incl[years[1]]
+    # Comparison markdown (if exactly two periods)
+    if len(periods) == 2:
+        p0 = periods[0]
+        p1 = periods[1]
+        y0_excl = period_aggs_excl[p0.label]
+        y1_excl = period_aggs_excl[p1.label]
+        l0_excl = period_langs_excl[p0.label]
+        l1_excl = period_langs_excl[p1.label]
+        d0_excl = period_dirs_excl[p0.label]
+        d1_excl = period_dirs_excl[p1.label]
+        y0_boot = period_aggs_boot[p0.label]
+        y1_boot = period_aggs_boot[p1.label]
+        l0_boot = period_langs_boot[p0.label]
+        l1_boot = period_langs_boot[p1.label]
+        d0_boot = period_dirs_boot[p0.label]
+        d1_boot = period_dirs_boot[p1.label]
+        y0_incl = period_aggs_incl[p0.label]
+        y1_incl = period_aggs_incl[p1.label]
 
         write_comparison_md(
-            report_dir / f"comparison_{years[0]}_vs_{years[1]}.md",
+            report_dir / f"comparison_{p0.label}_vs_{p1.label}.md",
             y0_excl,
             y1_excl,
             l0_excl,
@@ -2170,10 +1921,10 @@ def main(argv: list[str]) -> int:
             y0_incl,
             y1_incl,
         )
-        (report_dir / f"year_in_review_{years[0]}_vs_{years[1]}.txt").write_text(
+        (report_dir / f"year_in_review_{p0.label}_vs_{p1.label}.txt").write_text(
             render_yoy_year_in_review(
-                year0=years[0],
-                year1=years[1],
+                period0=p0,
+                period1=p1,
                 agg0=y0_excl,
                 agg1=y1_excl,
                 langs0=l0_excl,
@@ -2187,7 +1938,9 @@ def main(argv: list[str]) -> int:
     meta = {
         "generated_at": generated_at,
         "root": str(scan_root),
-        "years": years,
+        "reports_dir": str(report_dir),
+        "run_type": run_type,
+        "periods": [{"label": p.label, "start": p.start_iso, "end": p.end_iso} for p in periods],
         "repo_count_candidates": len(candidates),
         "repo_count_unique": len(results),
         "dedupe": args.dedupe,
