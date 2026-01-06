@@ -54,6 +54,10 @@ class RepoResult:
     languages_by_period_bootstraps: dict[str, dict[str, dict[str, int]]]  # language -> {insertions,deletions}
     dirs_by_period_excl_bootstraps: dict[str, dict[str, dict[str, int]]]  # dir -> {insertions,deletions,insertions_me,deletions_me}
     dirs_by_period_bootstraps: dict[str, dict[str, dict[str, int]]]  # dir -> {insertions,deletions,insertions_me,deletions_me}
+    me_monthly_by_period_excl_bootstraps: dict[str, dict[str, dict[str, int]]]  # month -> {commits,insertions,deletions}
+    me_monthly_by_period_bootstraps: dict[str, dict[str, dict[str, int]]]  # month -> {commits,insertions,deletions}
+    me_monthly_tech_by_period_excl_bootstraps: dict[str, dict[str, dict[str, dict[str, int]]]]  # month -> tech -> {commits,insertions,deletions}
+    me_monthly_tech_by_period_bootstraps: dict[str, dict[str, dict[str, dict[str, int]]]]  # month -> tech -> {commits,insertions,deletions}
     excluded_by_period: dict[str, dict[str, int]]  # counters for excluded paths
     bootstrap_commits_by_period: dict[str, list[dict[str, object]]]
     errors: list[str]

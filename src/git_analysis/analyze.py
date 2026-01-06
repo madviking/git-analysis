@@ -224,6 +224,105 @@ def merge_breakdown(dst: dict[str, dict[str, int]], src: dict[str, dict[str, int
             cur[k] = int(cur.get(k, 0)) + int(v)
 
 
+def month_labels_for_period(period: Period) -> list[str]:
+    cur = dt.date(period.start.year, period.start.month, 1)
+    out: list[str] = []
+    while cur < period.end:
+        out.append(f"{cur.year:04d}-{cur.month:02d}")
+        if cur.month == 12:
+            cur = dt.date(cur.year + 1, 1, 1)
+        else:
+            cur = dt.date(cur.year, cur.month + 1, 1)
+    return out
+
+
+def merge_me_monthly(dst: dict[str, dict[str, int]], src: dict[str, dict[str, int]]) -> None:
+    for month, st in src.items():
+        cur = dst.get(month)
+        if cur is None:
+            dst[month] = {k: int(v) for k, v in st.items()}
+            continue
+        for k, v in st.items():
+            cur[k] = int(cur.get(k, 0)) + int(v)
+
+
+def merge_me_monthly_tech(dst: dict[str, dict[str, dict[str, int]]], src: dict[str, dict[str, dict[str, int]]]) -> None:
+    for month, techs in src.items():
+        cur_month = dst.get(month)
+        if cur_month is None:
+            dst[month] = {tech: {k: int(v) for k, v in st.items()} for tech, st in techs.items()}
+            continue
+        for tech, st in techs.items():
+            cur_tech = cur_month.get(tech)
+            if cur_tech is None:
+                cur_month[tech] = {k: int(v) for k, v in st.items()}
+                continue
+            for k, v in st.items():
+                cur_tech[k] = int(cur_tech.get(k, 0)) + int(v)
+
+
+def aggregate_me_monthly(
+    repos: list[RepoResult],
+    period_label: str,
+    *,
+    include_bootstraps: bool,
+    bootstraps_only: bool = False,
+) -> dict[str, dict[str, int]]:
+    agg: dict[str, dict[str, int]] = defaultdict(lambda: {"commits": 0, "insertions": 0, "deletions": 0})
+    for r in repos:
+        if bootstraps_only:
+            merge_me_monthly(agg, r.me_monthly_by_period_bootstraps.get(period_label, {}))
+        else:
+            merge_me_monthly(agg, r.me_monthly_by_period_excl_bootstraps.get(period_label, {}))
+            if include_bootstraps:
+                merge_me_monthly(agg, r.me_monthly_by_period_bootstraps.get(period_label, {}))
+
+    out: dict[str, dict[str, int]] = {}
+    for month, st in agg.items():
+        ins = int(st.get("insertions", 0))
+        dele = int(st.get("deletions", 0))
+        out[month] = {
+            "commits": int(st.get("commits", 0)),
+            "insertions": ins,
+            "deletions": dele,
+            "changed": ins + dele,
+        }
+    return out
+
+
+def aggregate_me_monthly_tech(
+    repos: list[RepoResult],
+    period_label: str,
+    *,
+    include_bootstraps: bool,
+    bootstraps_only: bool = False,
+) -> dict[str, dict[str, dict[str, int]]]:
+    agg: dict[str, dict[str, dict[str, int]]] = defaultdict(
+        lambda: defaultdict(lambda: {"commits": 0, "insertions": 0, "deletions": 0})
+    )
+    for r in repos:
+        if bootstraps_only:
+            merge_me_monthly_tech(agg, r.me_monthly_tech_by_period_bootstraps.get(period_label, {}))
+        else:
+            merge_me_monthly_tech(agg, r.me_monthly_tech_by_period_excl_bootstraps.get(period_label, {}))
+            if include_bootstraps:
+                merge_me_monthly_tech(agg, r.me_monthly_tech_by_period_bootstraps.get(period_label, {}))
+
+    out: dict[str, dict[str, dict[str, int]]] = {}
+    for month, techs in agg.items():
+        out[month] = {}
+        for tech, st in techs.items():
+            ins = int(st.get("insertions", 0))
+            dele = int(st.get("deletions", 0))
+            out[month][tech] = {
+                "commits": int(st.get("commits", 0)),
+                "insertions": ins,
+                "deletions": dele,
+                "changed": ins + dele,
+            }
+    return out
+
+
 def merge_author_stats(dst: dict[str, AuthorStats], src: dict[str, AuthorStats]) -> None:
     for email_key, st in src.items():
         cur = dst.get(email_key)
@@ -256,6 +355,10 @@ def parse_numstat_stream(
     dict[str, dict[str, int]],  # languages bootstraps
     dict[str, dict[str, int]],  # dirs excl
     dict[str, dict[str, int]],  # dirs bootstraps
+    dict[str, dict[str, int]],  # me monthly excl: month -> {commits,insertions,deletions}
+    dict[str, dict[str, int]],  # me monthly bootstraps: month -> {commits,insertions,deletions}
+    dict[str, dict[str, dict[str, int]]],  # me monthly tech excl: month -> tech -> {commits,insertions,deletions}
+    dict[str, dict[str, dict[str, int]]],  # me monthly tech bootstraps: month -> tech -> {commits,insertions,deletions}
     dict[str, int],  # excluded path counters
     list[dict[str, object]],  # bootstrap commits
     list[str],  # errors
@@ -285,6 +388,14 @@ def parse_numstat_stream(
     languages_boot: dict[str, dict[str, int]] = defaultdict(lambda: {"insertions": 0, "deletions": 0, "insertions_me": 0, "deletions_me": 0})
     dirs_excl: dict[str, dict[str, int]] = defaultdict(lambda: {"insertions": 0, "deletions": 0, "insertions_me": 0, "deletions_me": 0})
     dirs_boot: dict[str, dict[str, int]] = defaultdict(lambda: {"insertions": 0, "deletions": 0, "insertions_me": 0, "deletions_me": 0})
+    me_monthly_excl: dict[str, dict[str, int]] = defaultdict(lambda: {"commits": 0, "insertions": 0, "deletions": 0})
+    me_monthly_boot: dict[str, dict[str, int]] = defaultdict(lambda: {"commits": 0, "insertions": 0, "deletions": 0})
+    me_monthly_tech_excl: dict[str, dict[str, dict[str, int]]] = defaultdict(
+        lambda: defaultdict(lambda: {"commits": 0, "insertions": 0, "deletions": 0})
+    )
+    me_monthly_tech_boot: dict[str, dict[str, dict[str, int]]] = defaultdict(
+        lambda: defaultdict(lambda: {"commits": 0, "insertions": 0, "deletions": 0})
+    )
     excluded: dict[str, int] = {
         "excluded_files": 0,
         "excluded_insertions": 0,
@@ -352,6 +463,19 @@ def parse_numstat_stream(
                 dirs_target[d]["insertions_me"] += ins
                 dirs_target[d]["deletions_me"] += dele
 
+        month_key = current_commit_iso[:7] if len(current_commit_iso) >= 7 and current_commit_iso[4:5] == "-" else ""
+        if current_author_is_me and month_key:
+            m_target = me_monthly_boot if is_boot else me_monthly_excl
+            m_target[month_key]["commits"] += 1
+            m_target[month_key]["insertions"] += current_insertions
+            m_target[month_key]["deletions"] += current_deletions
+
+            tech_target = me_monthly_tech_boot if is_boot else me_monthly_tech_excl
+            for tech, (ins, dele) in current_langs.items():
+                tech_target[month_key][tech]["commits"] += 1
+                tech_target[month_key][tech]["insertions"] += ins
+                tech_target[month_key][tech]["deletions"] += dele
+
         if is_boot:
             bootstrap_commits.append(
                 {
@@ -398,6 +522,10 @@ def parse_numstat_stream(
             dict(languages_boot),
             dict(dirs_excl),
             dict(dirs_boot),
+            dict(me_monthly_excl),
+            dict(me_monthly_boot),
+            {m: dict(v) for m, v in me_monthly_tech_excl.items()},
+            {m: dict(v) for m, v in me_monthly_tech_boot.items()},
             dict(excluded),
             bootstrap_commits,
             [f"failed to start git log: {e}"],
@@ -473,6 +601,10 @@ def parse_numstat_stream(
         dict(languages_boot),
         dict(dirs_excl),
         dict(dirs_boot),
+        dict(me_monthly_excl),
+        dict(me_monthly_boot),
+        {m: dict(v) for m, v in me_monthly_tech_excl.items()},
+        {m: dict(v) for m, v in me_monthly_tech_boot.items()},
         dict(excluded),
         bootstrap_commits,
         errors,
@@ -506,6 +638,10 @@ def analyze_repo(
     languages_by_period_boot: dict[str, dict[str, dict[str, int]]] = {}
     dirs_by_period_excl: dict[str, dict[str, dict[str, int]]] = {}
     dirs_by_period_boot: dict[str, dict[str, dict[str, int]]] = {}
+    me_monthly_by_period_excl: dict[str, dict[str, dict[str, int]]] = {}
+    me_monthly_by_period_boot: dict[str, dict[str, dict[str, int]]] = {}
+    me_monthly_tech_by_period_excl: dict[str, dict[str, dict[str, dict[str, int]]]] = {}
+    me_monthly_tech_by_period_boot: dict[str, dict[str, dict[str, dict[str, int]]]] = {}
     excluded_by_period: dict[str, dict[str, int]] = {}
     bootstrap_commits_by_period: dict[str, list[dict[str, object]]] = {}
 
@@ -519,6 +655,10 @@ def analyze_repo(
             langs_boot_only,
             dirs_excl_boot,
             dirs_boot_only,
+            me_monthly_excl_boot,
+            me_monthly_boot_only,
+            me_monthly_tech_excl_boot,
+            me_monthly_tech_boot_only,
             excluded,
             boot_commits,
             errs,
@@ -539,6 +679,10 @@ def analyze_repo(
         languages_by_period_boot[period.label] = langs_boot_only
         dirs_by_period_excl[period.label] = dirs_excl_boot
         dirs_by_period_boot[period.label] = dirs_boot_only
+        me_monthly_by_period_excl[period.label] = me_monthly_excl_boot
+        me_monthly_by_period_boot[period.label] = me_monthly_boot_only
+        me_monthly_tech_by_period_excl[period.label] = me_monthly_tech_excl_boot
+        me_monthly_tech_by_period_boot[period.label] = me_monthly_tech_boot_only
         excluded_by_period[period.label] = excluded
         bootstrap_commits_by_period[period.label] = boot_commits
         errors.extend(errs)
@@ -562,6 +706,10 @@ def analyze_repo(
         languages_by_period_bootstraps=languages_by_period_boot,
         dirs_by_period_excl_bootstraps=dirs_by_period_excl,
         dirs_by_period_bootstraps=dirs_by_period_boot,
+        me_monthly_by_period_excl_bootstraps=me_monthly_by_period_excl,
+        me_monthly_by_period_bootstraps=me_monthly_by_period_boot,
+        me_monthly_tech_by_period_excl_bootstraps=me_monthly_tech_by_period_excl,
+        me_monthly_tech_by_period_bootstraps=me_monthly_tech_by_period_boot,
         excluded_by_period=excluded_by_period,
         bootstrap_commits_by_period=bootstrap_commits_by_period,
         errors=errors,
@@ -1311,6 +1459,28 @@ def write_comparison_md(
     row("Deletions (others)", "deletions_others")
     lines.append("")
 
+    def top_union_keys(d0: dict[str, dict[str, int]], d1: dict[str, dict[str, int]], metric_key: str, limit: int) -> list[str]:
+        by0 = sorted(d0.items(), key=lambda kv: (-int(kv[1].get(metric_key, 0)), kv[0].lower()))[:limit]
+        by1 = sorted(d1.items(), key=lambda kv: (-int(kv[1].get(metric_key, 0)), kv[0].lower()))[:limit]
+        candidates = {k for k, _ in by0} | {k for k, _ in by1}
+        return sorted(candidates, key=lambda k: (-max(int(d0.get(k, {}).get(metric_key, 0)), int(d1.get(k, {}).get(metric_key, 0))), k.lower()))
+
+    def pct_value(old: int, new: int) -> float:
+        if old == 0:
+            return float("inf") if new != 0 else -float("inf")
+        return ((new - old) / old) * 100.0
+
+    def sort_keys_by_pct_change(d0: dict[str, dict[str, int]], d1: dict[str, dict[str, int]], metric_key: str, keys: list[str]) -> list[str]:
+        return sorted(
+            keys,
+            key=lambda k: (
+                -pct_value(int(d0.get(k, {}).get(metric_key, 0)), int(d1.get(k, {}).get(metric_key, 0))),
+                -(int(d1.get(k, {}).get(metric_key, 0)) - int(d0.get(k, {}).get(metric_key, 0))),
+                -max(int(d0.get(k, {}).get(metric_key, 0)), int(d1.get(k, {}).get(metric_key, 0))),
+                k.lower(),
+            ),
+        )
+
     def boot_row(metric: str, key: str) -> None:
         assert y0_boot is not None and y1_boot is not None
         old = int(y0_boot.get(key, 0))
@@ -1359,14 +1529,9 @@ def write_comparison_md(
         lines.append(f"| Language | {a} | {b} | Δ | Δ% |")
         lines.append("|---|---:|---:|---:|---:|")
 
-        # Use union of top languages from both years (by total changed).
-        by_changed0 = sorted(languages0.items(), key=lambda kv: (-int(kv[1].get("changed", 0)), kv[0].lower()))
-        by_changed1 = sorted(languages1.items(), key=lambda kv: (-int(kv[1].get("changed", 0)), kv[0].lower()))
-        candidate_langs: list[str] = []
-        for lang, _ in (by_changed0[:top_languages] + by_changed1[:top_languages]):
-            if lang not in candidate_langs:
-                candidate_langs.append(lang)
-        for lang in candidate_langs[:top_languages]:
+        # Select the rows to include by volume (max of the two periods), then sort that fixed set by Δ%.
+        langs = top_union_keys(languages0, languages1, "changed", top_languages)[:top_languages]
+        for lang in sort_keys_by_pct_change(languages0, languages1, "changed", langs):
             old = int(languages0.get(lang, {}).get("changed", 0))
             new = int(languages1.get(lang, {}).get("changed", 0))
             lines.append(f"| {lang} | {old:,} | {new:,} | {new-old:+,} | {pct_change(old, new)} |")
@@ -1376,13 +1541,8 @@ def write_comparison_md(
         lines.append("")
         lines.append(f"| Language | {a} | {b} | Δ | Δ% |")
         lines.append("|---|---:|---:|---:|---:|")
-        by_me0 = sorted(languages0.items(), key=lambda kv: (-int(kv[1].get("changed_me", 0)), kv[0].lower()))
-        by_me1 = sorted(languages1.items(), key=lambda kv: (-int(kv[1].get("changed_me", 0)), kv[0].lower()))
-        candidate_langs = []
-        for lang, _ in (by_me0[:top_languages] + by_me1[:top_languages]):
-            if lang not in candidate_langs:
-                candidate_langs.append(lang)
-        for lang in candidate_langs[:top_languages]:
+        langs = top_union_keys(languages0, languages1, "changed_me", top_languages)[:top_languages]
+        for lang in sort_keys_by_pct_change(languages0, languages1, "changed_me", langs):
             old = int(languages0.get(lang, {}).get("changed_me", 0))
             new = int(languages1.get(lang, {}).get("changed_me", 0))
             lines.append(f"| {lang} | {old:,} | {new:,} | {new-old:+,} | {pct_change(old, new)} |")
@@ -1393,13 +1553,8 @@ def write_comparison_md(
         lines.append("")
         lines.append(f"| Directory | {a} | {b} | Δ | Δ% |")
         lines.append("|---|---:|---:|---:|---:|")
-        by_changed0 = sorted(dirs0.items(), key=lambda kv: (-int(kv[1].get("changed", 0)), kv[0].lower()))
-        by_changed1 = sorted(dirs1.items(), key=lambda kv: (-int(kv[1].get("changed", 0)), kv[0].lower()))
-        candidate_dirs: list[str] = []
-        for d, _ in (by_changed0[:top_dirs] + by_changed1[:top_dirs]):
-            if d not in candidate_dirs:
-                candidate_dirs.append(d)
-        for d in candidate_dirs[:top_dirs]:
+        dirs = top_union_keys(dirs0, dirs1, "changed", top_dirs)[:top_dirs]
+        for d in sort_keys_by_pct_change(dirs0, dirs1, "changed", dirs):
             old = int(dirs0.get(d, {}).get("changed", 0))
             new = int(dirs1.get(d, {}).get("changed", 0))
             lines.append(f"| {d} | {old:,} | {new:,} | {new-old:+,} | {pct_change(old, new)} |")
@@ -1409,13 +1564,8 @@ def write_comparison_md(
         lines.append("")
         lines.append(f"| Directory | {a} | {b} | Δ | Δ% |")
         lines.append("|---|---:|---:|---:|---:|")
-        by_me0 = sorted(dirs0.items(), key=lambda kv: (-int(kv[1].get("changed_me", 0)), kv[0].lower()))
-        by_me1 = sorted(dirs1.items(), key=lambda kv: (-int(kv[1].get("changed_me", 0)), kv[0].lower()))
-        candidate_dirs = []
-        for d, _ in (by_me0[:top_dirs] + by_me1[:top_dirs]):
-            if d not in candidate_dirs:
-                candidate_dirs.append(d)
-        for d in candidate_dirs[:top_dirs]:
+        dirs = top_union_keys(dirs0, dirs1, "changed_me", top_dirs)[:top_dirs]
+        for d in sort_keys_by_pct_change(dirs0, dirs1, "changed_me", dirs):
             old = int(dirs0.get(d, {}).get("changed_me", 0))
             new = int(dirs1.get(d, {}).get("changed_me", 0))
             lines.append(f"| {d} | {old:,} | {new:,} | {new-old:+,} | {pct_change(old, new)} |")
@@ -1426,13 +1576,8 @@ def write_comparison_md(
         lines.append("")
         lines.append(f"| Language | {a} | {b} | Δ | Δ% |")
         lines.append("|---|---:|---:|---:|---:|")
-        by_changed0 = sorted(languages0_boot.items(), key=lambda kv: (-int(kv[1].get("changed", 0)), kv[0].lower()))
-        by_changed1 = sorted(languages1_boot.items(), key=lambda kv: (-int(kv[1].get("changed", 0)), kv[0].lower()))
-        candidate_langs: list[str] = []
-        for lang, _ in (by_changed0[:top_languages] + by_changed1[:top_languages]):
-            if lang not in candidate_langs:
-                candidate_langs.append(lang)
-        for lang in candidate_langs[:top_languages]:
+        langs = top_union_keys(languages0_boot, languages1_boot, "changed", top_languages)[:top_languages]
+        for lang in sort_keys_by_pct_change(languages0_boot, languages1_boot, "changed", langs):
             old = int(languages0_boot.get(lang, {}).get("changed", 0))
             new = int(languages1_boot.get(lang, {}).get("changed", 0))
             lines.append(f"| {lang} | {old:,} | {new:,} | {new-old:+,} | {pct_change(old, new)} |")
@@ -1443,13 +1588,8 @@ def write_comparison_md(
         lines.append("")
         lines.append(f"| Directory | {a} | {b} | Δ | Δ% |")
         lines.append("|---|---:|---:|---:|---:|")
-        by_changed0 = sorted(dirs0_boot.items(), key=lambda kv: (-int(kv[1].get("changed", 0)), kv[0].lower()))
-        by_changed1 = sorted(dirs1_boot.items(), key=lambda kv: (-int(kv[1].get("changed", 0)), kv[0].lower()))
-        candidate_dirs: list[str] = []
-        for d, _ in (by_changed0[:top_dirs] + by_changed1[:top_dirs]):
-            if d not in candidate_dirs:
-                candidate_dirs.append(d)
-        for d in candidate_dirs[:top_dirs]:
+        dirs = top_union_keys(dirs0_boot, dirs1_boot, "changed", top_dirs)[:top_dirs]
+        for d in sort_keys_by_pct_change(dirs0_boot, dirs1_boot, "changed", dirs):
             old = int(dirs0_boot.get(d, {}).get("changed", 0))
             new = int(dirs1_boot.get(d, {}).get("changed", 0))
             lines.append(f"| {d} | {old:,} | {new:,} | {new-old:+,} | {pct_change(old, new)} |")
@@ -1471,6 +1611,11 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--jobs", type=int, default=max(1, min(8, (os.cpu_count() or 4))), help="Parallel git jobs.")
     parser.add_argument("--top-authors", type=int, default=25, help="Top authors to include in JSON summary.")
     parser.add_argument("--include-bootstraps", action="store_true", help="Include detected bootstrap/import commits in main stats.")
+    parser.add_argument(
+        "--detailed",
+        action="store_true",
+        help="Write additional JSON time series for 'me' (monthly totals + per-technology).",
+    )
     args = parser.parse_args(argv)
 
     if args.periods:
@@ -1751,6 +1896,7 @@ def main(argv: list[str]) -> int:
     period_authors_excl: dict[str, dict[str, AuthorStats]] = {}
     period_authors_boot: dict[str, dict[str, AuthorStats]] = {}
     period_authors_incl: dict[str, dict[str, AuthorStats]] = {}
+    detailed_periods: dict[str, dict[str, object]] = {}
     ascii_top_n = 10
     for period in periods:
         label = period.label
@@ -1883,7 +2029,83 @@ def main(argv: list[str]) -> int:
             encoding="utf-8",
         )
 
+        if args.detailed:
+            months = month_labels_for_period(period)
+
+            def filled_month_rows(stats_by_month: dict[str, dict[str, int]]) -> list[dict[str, int | str]]:
+                out_rows: list[dict[str, int | str]] = []
+                for m in months:
+                    st = stats_by_month.get(m, {})
+                    out_rows.append(
+                        {
+                            "month": m,
+                            "commits": int(st.get("commits", 0)),
+                            "insertions": int(st.get("insertions", 0)),
+                            "deletions": int(st.get("deletions", 0)),
+                            "changed": int(st.get("changed", 0)),
+                        }
+                    )
+                return out_rows
+
+            def tech_rows(stats_by_month: dict[str, dict[str, dict[str, int]]]) -> list[dict[str, int | str]]:
+                rows: list[dict[str, int | str]] = []
+                for m in months:
+                    for tech, st in stats_by_month.get(m, {}).items():
+                        changed = int(st.get("changed", 0))
+                        commits = int(st.get("commits", 0))
+                        if changed <= 0 and commits <= 0:
+                            continue
+                        rows.append(
+                            {
+                                "month": m,
+                                "technology": tech,
+                                "commits": commits,
+                                "insertions": int(st.get("insertions", 0)),
+                                "deletions": int(st.get("deletions", 0)),
+                                "changed": changed,
+                            }
+                        )
+                rows.sort(key=lambda r: (str(r.get("month", "")), -int(r.get("changed", 0)), str(r.get("technology", "")).lower()))
+                return rows
+
+            me_monthly_excl = aggregate_me_monthly(results, label, include_bootstraps=False)
+            me_monthly_boot = aggregate_me_monthly(results, label, include_bootstraps=False, bootstraps_only=True)
+            me_monthly_incl = aggregate_me_monthly(results, label, include_bootstraps=True)
+
+            me_tech_excl = aggregate_me_monthly_tech(results, label, include_bootstraps=False)
+            me_tech_boot = aggregate_me_monthly_tech(results, label, include_bootstraps=False, bootstraps_only=True)
+            me_tech_incl = aggregate_me_monthly_tech(results, label, include_bootstraps=True)
+
+            detailed = {
+                "generated_at": generated_at,
+                "root": str(scan_root),
+                "period": label,
+                "start": period.start_iso,
+                "end": period.end_iso,
+                "me_only": True,
+                "technology_kind": "language_for_path",
+                "months": months,
+                "series": {
+                    "excl_bootstraps": {
+                        "totals_by_month": filled_month_rows(me_monthly_excl),
+                        "by_technology_by_month": tech_rows(me_tech_excl),
+                    },
+                    "bootstraps": {
+                        "totals_by_month": filled_month_rows(me_monthly_boot),
+                        "by_technology_by_month": tech_rows(me_tech_boot),
+                    },
+                    "including_bootstraps": {
+                        "totals_by_month": filled_month_rows(me_monthly_incl),
+                        "by_technology_by_month": tech_rows(me_tech_incl),
+                    },
+                },
+            }
+            detailed_periods[label] = detailed
+            write_json(report_dir / f"year_{label}_me_timeseries.json", detailed)
+
     write_repo_activity_csv(report_dir / "repo_activity.csv", results, [p.label for p in periods])
+    if args.detailed:
+        write_json(report_dir / "me_timeseries.json", {"generated_at": generated_at, "periods": detailed_periods})
 
     # Comparison markdown (if exactly two periods)
     if len(periods) == 2:
@@ -1947,6 +2169,7 @@ def main(argv: list[str]) -> int:
         "max_repos": int(args.max_repos),
         "include_merges": bool(args.include_merges),
         "include_bootstraps": bool(include_bootstraps),
+        "detailed": bool(args.detailed),
         "bootstrap_config": {
             "changed_threshold": bootstrap_cfg.changed_threshold,
             "files_threshold": bootstrap_cfg.files_threshold,

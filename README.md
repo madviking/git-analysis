@@ -11,6 +11,7 @@ For each analyzed year:
 - Per-repo CSV
 - Per-author CSV
 - Per-language CSV (based on file extension)
+- (Optional) Monthly JSON time series for “me” (`--detailed`)
 - ASCII “Year in Review” report (`.txt`)
 
 When exactly two years are requested, it also produces a side-by-side comparison including **Δ and Δ%** (and language tables).
@@ -95,6 +96,7 @@ Behavior:
 - `--dedupe remote|path`: dedupe repos by canonical `remote.origin.url` (default) or treat each clone separately
 - `--include-merges`: include merge commits (default excludes merges)
 - `--include-bootstraps`: include detected bootstrap/import commits in the main stats (default excludes)
+- `--detailed`: write extra JSON for graphing (“me” monthly totals + per-technology)
 
 ASCII output:
 - ASCII “Year in Review” reports are always generated to `reports/` (no flags required).
@@ -116,6 +118,8 @@ ASCII output:
 - `reports/repo_selection.csv`: debug list of discovered repos and why included/skipped/duplicated
 - `reports/repo_activity.csv`: per-repo activity across the requested years (excl bootstraps / bootstraps / incl bootstraps)
 - `reports/run_meta.json`: metadata about the run
+- `reports/year_<period>_me_timeseries.json`: (when `--detailed`) “me” monthly totals + per-technology (language) rows
+- `reports/me_timeseries.json`: (when `--detailed`) all requested periods in one JSON
 
 ## Important notes (accuracy)
 
