@@ -34,6 +34,15 @@ cp config.example.json config.json
 ```
 Reports are written under `reports/<run-type>/<timestamp>/` and `reports/latest.txt` points to the most recent run directory.
 
+## Development
+
+Run tests:
+
+```bash
+uv sync --group dev
+.venv/bin/python -m pytest
+```
+
 ## Configuration (`config.json`)
 
 Start from `config.example.json`.
