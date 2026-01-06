@@ -15,10 +15,12 @@ from .analysis_write import ensure_dir
 from .config import infer_me, load_config
 from .identity import MeMatcher, normalize_email, normalize_github_username, normalize_name
 from .models import BootstrapConfig, RepoResult
+from .publish import collect_publish_inputs, publish_with_wizard
 
 
 def run_analysis(*, args: argparse.Namespace, periods: list[Period]) -> int:
     config = load_config(args.config)
+    publish_inputs = collect_publish_inputs(args=args, config_path=args.config, config=config)
     me_emails_cfg = list(config.get("me_emails", []) or [])
     me_names_cfg = list(config.get("me_names", []) or [])
     me_email_globs_cfg = list(config.get("me_email_globs", []) or [])
@@ -168,6 +170,7 @@ def run_analysis(*, args: argparse.Namespace, periods: list[Period]) -> int:
         ascii_top_n=10,
     )
 
+    publish_with_wizard(report_dir=report_dir, periods=periods, results=results, inputs=publish_inputs, config_path=args.config, args=args)
+
     print(f"Done. Reports in: {report_dir}")
     return 0
-

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from .git import (
@@ -13,6 +14,11 @@ from .git import (
     remotes_included,
     select_remote,
 )
+
+
+def _repo_key_for(dedupe_key: str) -> str:
+    s = (dedupe_key or "").strip()
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 
 def discover_and_select_repos(
@@ -84,15 +90,17 @@ def discover_and_select_repos(
             continue
 
         if dedupe == "remote" and remote_canonical:
-            key = remote_canonical
+            dedupe_key = remote_canonical
         else:
-            key = str(top)
+            dedupe_key = str(top)
+        repo_key = _repo_key_for(dedupe_key)
 
-        entry = by_key.get(key)
+        entry = by_key.get(dedupe_key)
         if entry is None:
             last_iso, last_ts = get_last_commit(top)
-            by_key[key] = {
+            by_key[dedupe_key] = {
                 "repo": top,
+                "repo_key": repo_key,
                 "remote_name": remote_name,
                 "remote": remote,
                 "remote_canonical": remote_canonical,
@@ -105,7 +113,8 @@ def discover_and_select_repos(
                     "candidate_path": str(cand),
                     "repo_path": str(top),
                     "status": "included",
-                    "dedupe_key": key,
+                    "dedupe_key": dedupe_key,
+                    "repo_key": repo_key,
                     "remote_name": remote_name,
                     "remote_canonical": remote_canonical,
                 }
@@ -124,6 +133,7 @@ def discover_and_select_repos(
                 if prev_path != dup_path and prev_path not in entry["dups"]:
                     entry["dups"].append(prev_path)
                 entry["repo"] = top
+                entry["repo_key"] = repo_key
                 entry["remote_name"] = remote_name
                 entry["remote"] = remote
                 entry["remote_canonical"] = remote_canonical
@@ -133,7 +143,8 @@ def discover_and_select_repos(
                         "candidate_path": str(cand),
                         "repo_path": str(top),
                         "status": "included",
-                        "dedupe_key": key,
+                        "dedupe_key": dedupe_key,
+                        "repo_key": repo_key,
                         "remote_name": remote_name,
                         "remote_canonical": remote_canonical,
                         "note": f"replaced_clone:{prev_path}",
@@ -147,7 +158,8 @@ def discover_and_select_repos(
                         "candidate_path": str(cand),
                         "repo_path": str(top),
                         "status": "duplicate",
-                        "dedupe_key": key,
+                        "dedupe_key": dedupe_key,
+                        "repo_key": repo_key,
                         "remote_name": remote_name,
                         "remote_canonical": remote_canonical,
                         "note": f"kept_clone:{entry['repo']}",
@@ -155,9 +167,9 @@ def discover_and_select_repos(
                 )
 
     repos_to_analyze = [
-        (k, v["repo"], v.get("remote_name", ""), v["remote"], v.get("remote_canonical", ""), v["dups"]) for k, v in by_key.items()
+        (v.get("repo_key", _repo_key_for(k)), v["repo"], v.get("remote_name", ""), v["remote"], v.get("remote_canonical", ""), v["dups"])
+        for k, v in by_key.items()
     ]
     repos_to_analyze.sort(key=lambda x: x[1].as_posix())
 
     return candidates, repos_to_analyze, selection_rows
-

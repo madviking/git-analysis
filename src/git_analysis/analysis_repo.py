@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 import subprocess
 from collections import defaultdict
 from pathlib import Path
@@ -9,6 +10,24 @@ from .analysis_periods import Period
 from .git import get_first_commit, get_last_commit
 from .identity import MeMatcher, normalize_email
 from .models import AuthorStats, BootstrapConfig, RepoResult, RepoYearStats
+
+
+def _week_start_iso(commit_iso: str) -> str:
+    s = (commit_iso or "").strip()
+    if not s:
+        return ""
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        d = dt.datetime.fromisoformat(s)
+    except ValueError:
+        return ""
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=dt.timezone.utc)
+    d_utc = d.astimezone(dt.timezone.utc)
+    date_utc = d_utc.date()
+    week_start = date_utc - dt.timedelta(days=date_utc.weekday())
+    return f"{week_start.isoformat()}T00:00:00Z"
 
 
 def parse_numstat_stream(
@@ -22,6 +41,8 @@ def parse_numstat_stream(
 ) -> tuple[
     RepoYearStats,  # excl bootstraps
     RepoYearStats,  # bootstraps only
+    dict[str, dict[str, int]],  # weekly excl: week_start -> {commits,insertions,deletions}
+    dict[str, dict[str, int]],  # weekly bootstraps: week_start -> {commits,insertions,deletions}
     dict[str, AuthorStats],  # authors excl
     dict[str, AuthorStats],  # authors bootstraps
     dict[str, dict[str, int]],  # languages excl
@@ -55,6 +76,8 @@ def parse_numstat_stream(
 
     stats_excl = RepoYearStats()
     stats_boot = RepoYearStats()
+    weekly_excl: dict[str, dict[str, int]] = defaultdict(lambda: {"commits": 0, "insertions": 0, "deletions": 0})
+    weekly_boot: dict[str, dict[str, int]] = defaultdict(lambda: {"commits": 0, "insertions": 0, "deletions": 0})
     authors_excl: dict[str, AuthorStats] = {}
     authors_boot: dict[str, AuthorStats] = {}
     languages_excl: dict[str, dict[str, int]] = defaultdict(
@@ -108,6 +131,7 @@ def parse_numstat_stream(
 
         is_boot = bootstrap.is_bootstrap(current_insertions, current_deletions, current_files_touched)
         stats_target = stats_boot if is_boot else stats_excl
+        weekly_target = weekly_boot if is_boot else weekly_excl
         authors_target = authors_boot if is_boot else authors_excl
         langs_target = languages_boot if is_boot else languages_excl
         dirs_target = dirs_boot if is_boot else dirs_excl
@@ -115,6 +139,12 @@ def parse_numstat_stream(
         stats_target.commits_total += 1
         stats_target.insertions_total += current_insertions
         stats_target.deletions_total += current_deletions
+
+        wk = _week_start_iso(current_commit_iso)
+        if wk:
+            weekly_target[wk]["commits"] += 1
+            weekly_target[wk]["insertions"] += current_insertions
+            weekly_target[wk]["deletions"] += current_deletions
         if current_author_is_me:
             stats_target.commits_me += 1
             stats_target.insertions_me += current_insertions
@@ -197,6 +227,8 @@ def parse_numstat_stream(
         return (
             stats_excl,
             stats_boot,
+            dict(weekly_excl),
+            dict(weekly_boot),
             authors_excl,
             authors_boot,
             dict(languages_excl),
@@ -276,6 +308,8 @@ def parse_numstat_stream(
     return (
         stats_excl,
         stats_boot,
+        dict(weekly_excl),
+        dict(weekly_boot),
         authors_excl,
         authors_boot,
         dict(languages_excl),
@@ -313,6 +347,8 @@ def analyze_repo(
 
     period_stats_excl: dict[str, RepoYearStats] = {}
     period_stats_boot: dict[str, RepoYearStats] = {}
+    weekly_by_period_excl: dict[str, dict[str, dict[str, int]]] = {}
+    weekly_by_period_boot: dict[str, dict[str, dict[str, int]]] = {}
     authors_by_period_excl: dict[str, dict[str, AuthorStats]] = {}
     authors_by_period_boot: dict[str, dict[str, AuthorStats]] = {}
     languages_by_period_excl: dict[str, dict[str, dict[str, int]]] = {}
@@ -330,6 +366,8 @@ def analyze_repo(
         (
             stats_excl_boot,
             stats_boot_only,
+            weekly_excl_boot,
+            weekly_boot_only,
             authors_excl_boot,
             authors_boot_only,
             langs_excl_boot,
@@ -354,6 +392,8 @@ def analyze_repo(
         )
         period_stats_excl[period.label] = stats_excl_boot
         period_stats_boot[period.label] = stats_boot_only
+        weekly_by_period_excl[period.label] = weekly_excl_boot
+        weekly_by_period_boot[period.label] = weekly_boot_only
         authors_by_period_excl[period.label] = authors_excl_boot
         authors_by_period_boot[period.label] = authors_boot_only
         languages_by_period_excl[period.label] = langs_excl_boot
@@ -381,6 +421,8 @@ def analyze_repo(
         last_commit_iso=last_iso,
         period_stats_excl_bootstraps=period_stats_excl,
         period_stats_bootstraps=period_stats_boot,
+        weekly_by_period_excl_bootstraps=weekly_by_period_excl,
+        weekly_by_period_bootstraps=weekly_by_period_boot,
         authors_by_period_excl_bootstraps=authors_by_period_excl,
         authors_by_period_bootstraps=authors_by_period_boot,
         languages_by_period_excl_bootstraps=languages_by_period_excl,
@@ -395,4 +437,3 @@ def analyze_repo(
         bootstrap_commits_by_period=bootstrap_commits_by_period,
         errors=errors,
     )
-

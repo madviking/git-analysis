@@ -45,6 +45,45 @@ def merge_me_monthly(dst: dict[str, dict[str, int]], src: dict[str, dict[str, in
             cur[k] = int(cur.get(k, 0)) + int(v)
 
 
+def merge_weekly(dst: dict[str, dict[str, int]], src: dict[str, dict[str, int]]) -> None:
+    for week_start, st in src.items():
+        cur = dst.get(week_start)
+        if cur is None:
+            dst[week_start] = {k: int(v) for k, v in st.items()}
+            continue
+        for k, v in st.items():
+            cur[k] = int(cur.get(k, 0)) + int(v)
+
+
+def aggregate_weekly(
+    repos: list[RepoResult],
+    period_label: str,
+    *,
+    include_bootstraps: bool,
+    bootstraps_only: bool = False,
+) -> dict[str, dict[str, int]]:
+    agg: dict[str, dict[str, int]] = defaultdict(lambda: {"commits": 0, "insertions": 0, "deletions": 0})
+    for r in repos:
+        if bootstraps_only:
+            merge_weekly(agg, r.weekly_by_period_bootstraps.get(period_label, {}))
+        else:
+            merge_weekly(agg, r.weekly_by_period_excl_bootstraps.get(period_label, {}))
+            if include_bootstraps:
+                merge_weekly(agg, r.weekly_by_period_bootstraps.get(period_label, {}))
+
+    out: dict[str, dict[str, int]] = {}
+    for week_start, st in agg.items():
+        ins = int(st.get("insertions", 0))
+        dele = int(st.get("deletions", 0))
+        out[week_start] = {
+            "commits": int(st.get("commits", 0)),
+            "insertions": ins,
+            "deletions": dele,
+            "changed": ins + dele,
+        }
+    return out
+
+
 def merge_me_monthly_tech(dst: dict[str, dict[str, dict[str, int]]], src: dict[str, dict[str, dict[str, int]]]) -> None:
     for month, techs in src.items():
         cur_month = dst.get(month)
@@ -314,4 +353,3 @@ def aggregate_excluded(repos: list[RepoResult], period_label: str) -> dict[str, 
         for k, v in ex.items():
             agg[k] += int(v)
     return dict(agg)
-

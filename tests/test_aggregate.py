@@ -19,6 +19,8 @@ def test_repo_period_stats_include_bootstraps() -> None:
         last_commit_iso=None,
         period_stats_excl_bootstraps={period: RepoYearStats(commits_total=1, insertions_total=2, deletions_total=3, commits_me=0, insertions_me=0, deletions_me=0)},
         period_stats_bootstraps={period: RepoYearStats(commits_total=4, insertions_total=5, deletions_total=6, commits_me=0, insertions_me=0, deletions_me=0)},
+        weekly_by_period_excl_bootstraps={},
+        weekly_by_period_bootstraps={},
         authors_by_period_excl_bootstraps={},
         authors_by_period_bootstraps={},
         languages_by_period_excl_bootstraps={},
@@ -41,4 +43,3 @@ def test_repo_period_stats_include_bootstraps() -> None:
     incl = repo_period_stats(r, period, include_bootstraps=True)
     assert incl.commits_total == 5
     assert incl.changed_total == (2 + 3) + (5 + 6)
-

@@ -1,21 +1,27 @@
 {
-  "me_emails": ["you@example.com"],
-  "me_names": ["Your Name"],
-  "me_email_globs": [],
-  "me_name_globs": [],
-  "me_github_usernames": ["your-github-username"],
+  "me_emails": [
+    "timo@east.fi"
+  ],
+  "me_names": [
+    "Timo Railo"
+  ],
+  "me_github_usernames": [
+    "madviking"
+  ],
   "include_remote_prefixes": [
     "github.com/madviking",
     "github.com/east-interactive",
     "github.com/eastbg"
   ],
-  "remote_name_priority": ["origin", "upstream"],
+  "remote_name_priority": [
+    "origin",
+    "upstream"
+  ],
   "remote_filter_mode": "any",
   "exclude_forks": true,
-  "fork_remote_names": ["upstream"],
-  "bootstrap_changed_threshold": 50000,
-  "bootstrap_files_threshold": 200,
-  "bootstrap_addition_ratio": 0.9,
+  "fork_remote_names": [
+    "upstream"
+  ],
   "exclude_path_prefixes": [
     "vendor/",
     "node_modules/",
@@ -29,21 +35,33 @@
   ],
   "exclude_path_globs": [
     "**/vendor/**",
+    "**/companies/*.json",
+    "**/output/**",
+    "**/logs/**",
+    "**/log/**",
     "**/node_modules/**",
+    "**/companies/*.json",
+    "**/output/**",
+    "**/input/**",
+    "**/logs/**",
+    "**/log/**",
     "**/*.min.js",
     "**/*.min.css"
   ],
   "exclude_dirnames": [
     ".git",
     ".venv",
-    "git-analysis",
     "node_modules",
     "vendor",
     "dist",
+    "uploads",
     "build",
     "target",
     ".idea",
     ".pytest_cache",
-    "__pycache__"
+    "__pycache__",
+    "uploads",
+    "cache"
   ]
 }
+

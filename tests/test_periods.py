@@ -25,7 +25,7 @@ def test_parse_period_halves() -> None:
 
 def test_parse_period_invalid() -> None:
     with pytest.raises(ValueError):
-        parse_period("H12025")
+        parse_period("2025Q1")
 
 
 def test_month_labels_for_period() -> None:
@@ -36,4 +36,3 @@ def test_month_labels_for_period() -> None:
 def test_slugify() -> None:
     assert slugify("compare 2025H1 vs 2025H2") == "compare-2025H1-vs-2025H2"
     assert slugify("") == "run"
-

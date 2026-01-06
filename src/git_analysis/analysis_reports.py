@@ -11,10 +11,12 @@ from .analysis_aggregate import (
     aggregate_me_monthly,
     aggregate_me_monthly_tech,
     aggregate_period,
+    aggregate_weekly,
 )
 from .analysis_periods import Period, month_labels_for_period
 from .analysis_render import render_year_in_review, render_yoy_year_in_review, write_comparison_md
 from .analysis_write import (
+    ensure_dir,
     write_authors_csv,
     write_bootstrap_commits_csv,
     write_dirs_csv,
@@ -57,8 +59,17 @@ def write_reports(
 ) -> None:
     generated_at = dt.datetime.now(tz=dt.timezone.utc).isoformat()
 
-    write_repo_selection_csv(report_dir / "repo_selection.csv", selection_rows)
-    write_repo_selection_summary(report_dir / "repo_selection_summary.json", selection_rows)
+    csv_dir = report_dir / "csv"
+    json_dir = report_dir / "json"
+    timeseries_dir = report_dir / "timeseries"
+    debug_dir = report_dir / "debug"
+    ensure_dir(csv_dir)
+    ensure_dir(json_dir)
+    ensure_dir(timeseries_dir)
+    ensure_dir(debug_dir)
+
+    write_repo_selection_csv(debug_dir / "repo_selection.csv", selection_rows)
+    write_repo_selection_summary(debug_dir / "repo_selection_summary.json", selection_rows)
 
     period_aggs_excl: dict[str, dict] = {}
     period_aggs_boot: dict[str, dict] = {}
@@ -167,16 +178,16 @@ def write_reports(
         if label.isdigit() and len(label) == 4:
             summary["year"] = int(label)
 
-        write_json(report_dir / f"year_{label}_summary.json", summary)
-        write_repos_csv(report_dir / f"year_{label}_repos.csv", results, label, me)
-        write_authors_csv(report_dir / f"year_{label}_authors.csv", authors_agg, me)
-        write_languages_csv(report_dir / f"year_{label}_languages.csv", languages_agg)
-        write_dirs_csv(report_dir / f"year_{label}_dirs.csv", dirs_agg)
-        write_json(report_dir / f"year_{label}_excluded.json", excluded_agg)
-        write_bootstrap_commits_csv(report_dir / f"year_{label}_bootstraps_commits.csv", results, label)
-        write_authors_csv(report_dir / f"year_{label}_bootstraps_authors.csv", authors_boot, me)
-        write_languages_csv(report_dir / f"year_{label}_bootstraps_languages.csv", languages_boot)
-        write_dirs_csv(report_dir / f"year_{label}_bootstraps_dirs.csv", dirs_boot)
+        write_json(json_dir / f"year_{label}_summary.json", summary)
+        write_json(json_dir / f"year_{label}_excluded.json", excluded_agg)
+        write_repos_csv(csv_dir / f"year_{label}_repos.csv", results, label, me)
+        write_authors_csv(csv_dir / f"year_{label}_authors.csv", authors_agg, me)
+        write_languages_csv(csv_dir / f"year_{label}_languages.csv", languages_agg)
+        write_dirs_csv(csv_dir / f"year_{label}_dirs.csv", dirs_agg)
+        write_bootstrap_commits_csv(csv_dir / f"year_{label}_bootstraps_commits.csv", results, label)
+        write_authors_csv(csv_dir / f"year_{label}_bootstraps_authors.csv", authors_boot, me)
+        write_languages_csv(csv_dir / f"year_{label}_bootstraps_languages.csv", languages_boot)
+        write_dirs_csv(csv_dir / f"year_{label}_bootstraps_dirs.csv", dirs_boot)
 
         (report_dir / f"year_in_review_{label}.txt").write_text(
             render_year_in_review(
@@ -273,11 +284,48 @@ def write_reports(
                 },
             }
             detailed_periods[label] = detailed_json
-            write_json(report_dir / f"year_{label}_me_timeseries.json", detailed_json)
+            write_json(timeseries_dir / f"year_{label}_me_timeseries.json", detailed_json)
 
-    write_repo_activity_csv(report_dir / "repo_activity.csv", results, [p.label for p in periods])
+        weekly_excl = aggregate_weekly(results, label, include_bootstraps=False)
+        weekly_boot = aggregate_weekly(results, label, include_bootstraps=False, bootstraps_only=True)
+        weekly_incl = aggregate_weekly(results, label, include_bootstraps=True)
+
+        def weekly_rows(w: dict[str, dict[str, int]]) -> list[dict[str, int | str]]:
+            rows: list[dict[str, int | str]] = []
+            for week_start, st in sorted(w.items(), key=lambda kv: kv[0]):
+                rows.append(
+                    {
+                        "week_start": week_start,
+                        "commits": int(st.get("commits", 0)),
+                        "insertions": int(st.get("insertions", 0)),
+                        "deletions": int(st.get("deletions", 0)),
+                        "changed": int(st.get("changed", 0)),
+                    }
+                )
+            return rows
+
+        write_json(
+            timeseries_dir / f"year_{label}_weekly.json",
+            {
+                "generated_at": generated_at,
+                "period": label,
+                "start": period.start_iso,
+                "end": period.end_iso,
+                "definition": {
+                    "bucket": "week_start_monday_00_00_00Z",
+                    "timestamp_source": "author_time_%aI_converted_to_utc",
+                },
+                "series": {
+                    "excl_bootstraps": weekly_rows(weekly_excl),
+                    "bootstraps": weekly_rows(weekly_boot),
+                    "including_bootstraps": weekly_rows(weekly_incl),
+                },
+            },
+        )
+
+    write_repo_activity_csv(csv_dir / "repo_activity.csv", results, [p.label for p in periods])
     if detailed:
-        write_json(report_dir / "me_timeseries.json", {"generated_at": generated_at, "periods": detailed_periods})
+        write_json(timeseries_dir / "me_timeseries.json", {"generated_at": generated_at, "periods": detailed_periods})
 
     # Comparison markdown (if exactly two periods)
     if len(periods) == 2:
@@ -362,5 +410,4 @@ def write_reports(
         },
         "errors_count": sum(len(r.errors) for r in results),
     }
-    write_json(report_dir / "run_meta.json", meta)
-
+    write_json(json_dir / "run_meta.json", meta)

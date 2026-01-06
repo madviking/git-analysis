@@ -48,6 +48,8 @@ class RepoResult:
     last_commit_iso: str | None
     period_stats_excl_bootstraps: dict[str, RepoYearStats]
     period_stats_bootstraps: dict[str, RepoYearStats]
+    weekly_by_period_excl_bootstraps: dict[str, dict[str, dict[str, int]]]  # week_start -> {commits,insertions,deletions}
+    weekly_by_period_bootstraps: dict[str, dict[str, dict[str, int]]]  # week_start -> {commits,insertions,deletions}
     authors_by_period_excl_bootstraps: dict[str, dict[str, AuthorStats]]  # email -> stats
     authors_by_period_bootstraps: dict[str, dict[str, AuthorStats]]  # email -> stats
     languages_by_period_excl_bootstraps: dict[str, dict[str, dict[str, int]]]  # language -> {insertions,deletions}

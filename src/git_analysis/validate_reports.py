@@ -35,7 +35,7 @@ def main(argv: list[str] | None = None) -> int:
     if not reports.exists():
         raise SystemExit(f"Reports dir not found: {reports}")
 
-    summaries = sorted(reports.glob("year_*_summary.json"))
+    summaries = sorted((reports / "json").glob("year_*_summary.json")) if (reports / "json").exists() else sorted(reports.glob("year_*_summary.json"))
     if not summaries:
         latest = reports / "latest.txt"
         if latest.exists():
@@ -44,7 +44,11 @@ def main(argv: list[str] | None = None) -> int:
                 candidate = (reports / rel).resolve()
                 if candidate.exists():
                     reports = candidate
-                    summaries = sorted(reports.glob("year_*_summary.json"))
+                    summaries = (
+                        sorted((reports / "json").glob("year_*_summary.json"))
+                        if (reports / "json").exists()
+                        else sorted(reports.glob("year_*_summary.json"))
+                    )
     if not summaries:
         raise SystemExit(f"No summary JSON files in: {reports}")
 
@@ -66,7 +70,8 @@ def main(argv: list[str] | None = None) -> int:
 
     ok = True
     for label in labels:
-        summary_path = reports / f"year_{label}_summary.json"
+        base = reports / "json" if (reports / "json").exists() else reports
+        summary_path = base / f"year_{label}_summary.json"
         if not summary_path.exists():
             print(f"[WARN] missing {summary_path}")
             ok = False

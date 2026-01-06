@@ -34,6 +34,20 @@ cp config.example.json config.json
 ```
 Reports are written under `reports/<run-type>/<timestamp>/` and `reports/latest.txt` points to the most recent run directory.
 
+## Documentation
+
+Start here: `docs/index.md`.
+
+## Publishing (upload wizard)
+
+Every run prompts whether to publish results and (if publishing) collects/saves defaults to `config.json` under `publish.*`.
+
+Server destination is configured in `server.json`:
+
+```json
+{ "api_url": "http://localhost:3220" }
+```
+
 ## Development
 
 Run tests:
@@ -96,8 +110,8 @@ CLI:
 Common:
 - `--root PATH`: directory to scan for repos (default `..`)
 - `--years 2024 2025`: which years to compute
-- `--periods 2025H1 2025H2`: analyze arbitrary periods (supports `YYYY`, `YYYYH1`, `YYYYH2`)
-- `--halves 2025`: shortcut for `2025H1` vs `2025H2`
+- `--periods 2025H1 2025H2`: analyze arbitrary periods (supports `YYYY`, `YYYYH1`/`H1YYYY`, `YYYYH2`/`H2YYYY`)
+- `--halves 2025`: shortcut for `2025H1` vs `2025H2` (also supports `--halves H12025,H12026`)
 - `--jobs N`: parallel workers for `git` calls
 - `--max-repos N`: analyze only the first N unique repos (good for trial runs)
 
@@ -113,22 +127,14 @@ ASCII output:
 
 ## Output files
 
-- `reports/year_YYYY_summary.json`: aggregates + top authors + config used for that run
-- `reports/year_YYYY_repos.csv`: per-repo totals (includes selected `remote_name`, `remote_canonical`, duplicates, first/last commit timestamps)
-- `reports/year_YYYY_authors.csv`: per-author totals
-- `reports/year_YYYY_languages.csv`: per-language totals (by file extension)
-- `reports/year_YYYY_bootstraps_commits.csv`: detected bootstrap commits (per-commit totals)
-- `reports/year_YYYY_bootstraps_authors.csv`: author totals for bootstrap commits only
-- `reports/year_YYYY_bootstraps_languages.csv`: language totals for bootstrap commits only
-- `reports/year_YYYY_bootstraps_dirs.csv`: directory totals for bootstrap commits only
-- `reports/comparison_YYYY_vs_YYYY.md`: side-by-side report with Δ and Δ% (only when 2 years are provided)
-- `reports/year_in_review_YYYY.txt`: ASCII “Year in Review” for that year
-- `reports/year_in_review_YYYY_vs_YYYY.txt`: ASCII year-over-year “Year in Review” (only when 2 years are provided)
-- `reports/repo_selection.csv`: debug list of discovered repos and why included/skipped/duplicated
-- `reports/repo_activity.csv`: per-repo activity across the requested years (excl bootstraps / bootstraps / incl bootstraps)
-- `reports/run_meta.json`: metadata about the run
-- `reports/year_<period>_me_timeseries.json`: (when `--detailed`) “me” monthly totals + per-technology (language) rows
-- `reports/me_timeseries.json`: (when `--detailed`) all requested periods in one JSON
+Reports are written under `reports/<run-type>/<timestamp>/` and `reports/latest.txt` points to the most recent run directory.
+
+Within a run directory:
+- Root (markup): `year_in_review_<period>.txt`, `year_in_review_<p0>_vs_<p1>.txt`, `comparison_<p0>_vs_<p1>.md`
+- `json/`: `year_<period>_summary.json`, `year_<period>_excluded.json`, `run_meta.json`
+- `csv/`: `year_<period>_repos.csv`, `year_<period>_authors.csv`, `year_<period>_languages.csv`, `year_<period>_dirs.csv`, `year_<period>_bootstraps_*.csv`, `repo_activity.csv`
+- `timeseries/`: `year_<period>_weekly.json`, plus (when `--detailed`) `year_<period>_me_timeseries.json` and `me_timeseries.json`
+- `debug/`: `repo_selection.csv`, `repo_selection_summary.json`
 
 ## Important notes (accuracy)
 
@@ -148,11 +154,11 @@ ASCII output:
 
 These files help explain why a repo did or didn’t make it into the analysis:
 
-- `reports/repo_selection.csv`: one row per discovered candidate repo with `status` and `reason` (e.g. `remote_filter_no_match`, `no_remotes`, `duplicate`)
-- `reports/repo_selection_summary.json`: counts by status/reason
-- `reports/repo_activity.csv`: per-repo activity across the requested years (excl bootstraps / bootstraps / incl bootstraps)
-- `reports/year_YYYY_dirs.csv`: directory-level churn (top-level directory like `src`, `tests`, `docs`, `(root)`)
-- `reports/year_YYYY_excluded.json`: how many lines/files were skipped by `exclude_path_prefixes`/`exclude_path_globs`
+- `debug/repo_selection.csv`: one row per discovered candidate repo with `status` and `reason` (e.g. `remote_filter_no_match`, `no_remotes`, `duplicate`)
+- `debug/repo_selection_summary.json`: counts by status/reason
+- `csv/repo_activity.csv`: per-repo activity across the requested years (excl bootstraps / bootstraps / incl bootstraps)
+- `csv/year_YYYY_dirs.csv`: directory-level churn (top-level directory like `src`, `tests`, `docs`, `(root)`)
+- `json/year_YYYY_excluded.json`: how many lines/files were skipped by `exclude_path_prefixes`/`exclude_path_globs`
 
 ## Validate reports
 

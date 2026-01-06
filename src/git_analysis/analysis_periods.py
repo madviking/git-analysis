@@ -31,6 +31,10 @@ def parse_period(spec: str) -> Period:
         if half == "H1":
             return Period(label=f"{year}H1", start=dt.date(year, 1, 1), end=dt.date(year, 7, 1))
         return Period(label=f"{year}H2", start=dt.date(year, 7, 1), end=dt.date(year + 1, 1, 1))
+    if len(s) == 6 and s[:2].upper() in ("H1", "H2") and s[2:].isdigit():
+        half = s[:2].upper()
+        year = int(s[2:])
+        return parse_period(f"{year}{half}")
     raise ValueError(f"Invalid period: {spec!r} (expected YYYY, YYYYH1, or YYYYH2)")
 
 
@@ -52,8 +56,9 @@ def slugify(s: str) -> str:
 
 def run_type_from_args(args: argparse.Namespace, periods: list[Period]) -> str:
     labels = [p.label for p in periods]
-    if getattr(args, "halves", 0):
-        return f"halves_{int(args.halves)}"
+    halves = getattr(args, "halves", "") or ""
+    if str(halves).strip():
+        return "halves_" + slugify(str(halves))
     if getattr(args, "periods", None):
         if len(labels) == 2:
             return f"compare_{labels[0]}_vs_{labels[1]}"
@@ -74,4 +79,3 @@ def month_labels_for_period(period: Period) -> list[str]:
         else:
             cur = dt.date(cur.year, cur.month + 1, 1)
     return out
-

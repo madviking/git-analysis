@@ -12,6 +12,11 @@ def load_config(config_path: Path) -> dict:
     return json.loads(config_path.read_text(encoding="utf-8"))
 
 
+def save_config(config_path: Path, config: dict) -> None:
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def infer_me() -> tuple[list[str], list[str]]:
     emails: list[str] = []
     names: list[str] = []
@@ -25,4 +30,3 @@ def infer_me() -> tuple[list[str], list[str]]:
         names.append(out.strip())
 
     return emails, names
-
