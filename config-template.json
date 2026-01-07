@@ -15,6 +15,10 @@
     "automatic_upload": "confirm",
     "api_url": "http://localhost:3220",
     "default_publish": false,
+    "upload_years": [
+      2024,
+      2025
+    ],
     "llm_coding": {
       "started_at": null,
       "dominant_at": null,
@@ -22,7 +26,6 @@
       "primary_tool_current": "none"
     },
     "publisher": "",
-    "repo_url_privacy": "none",
     "publisher_token_path": "~/.config/git-analysis/publisher_token"
   },
   "excluded_repos": [

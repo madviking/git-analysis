@@ -2,6 +2,8 @@
 
 Reports are written under `reports/<run-type>/<timestamp>/`. `reports/latest.txt` points to the most recent run directory.
 
+Text and Markdown reports abbreviate large numbers (e.g. `1K`, `2.5M`, `1B`) including large percentage deltas.
+
 Within a run directory:
 
 ## Root (markup)
@@ -37,6 +39,7 @@ Within a run directory:
 
 ## `timeseries/`
 - `year_<period>_weekly.json` (weekly totals, required)
+  - Each weekly row also includes `technologies`: an array of per-technology (language) stats for that week.
 - `year_<period>_me_timeseries.json` (only when `--detailed`)
 - `me_timeseries.json` (only when `--detailed`)
 

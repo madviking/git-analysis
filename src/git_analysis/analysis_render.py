@@ -13,9 +13,52 @@ YEAR_IN_REVIEW_BANNER = r"""
 +------------------------------------------------------------------------+
 """.strip("\n")
 
+_HUMAN_UNITS = ["", "K", "M", "B", "T"]
+
 
 def fmt_int(n: int) -> str:
-    return f"{int(n):,}"
+    n_int = int(n)
+    if n_int == 0:
+        return "0"
+
+    sign = "-" if n_int < 0 else ""
+    abs_n = -n_int if n_int < 0 else n_int
+
+    unit_idx = 0
+    unit_value = 1
+    while unit_idx < len(_HUMAN_UNITS) - 1 and abs_n >= unit_value * 1000:
+        unit_value *= 1000
+        unit_idx += 1
+
+    if unit_idx == 0:
+        return str(n_int)
+
+    while True:
+        decimals = 0 if abs_n >= unit_value * 100 else 1
+        if decimals == 0:
+            rounded = (abs_n + (unit_value // 2)) // unit_value
+            if rounded >= 1000 and unit_idx < len(_HUMAN_UNITS) - 1:
+                unit_value *= 1000
+                unit_idx += 1
+                continue
+            return f"{sign}{rounded}{_HUMAN_UNITS[unit_idx]}"
+
+        rounded10 = (abs_n * 10 + (unit_value // 2)) // unit_value
+        if rounded10 >= 1000 * 10 and unit_idx < len(_HUMAN_UNITS) - 1:
+            unit_value *= 1000
+            unit_idx += 1
+            continue
+        whole, frac = divmod(rounded10, 10)
+        if frac == 0:
+            return f"{sign}{whole}{_HUMAN_UNITS[unit_idx]}"
+        return f"{sign}{whole}.{frac}{_HUMAN_UNITS[unit_idx]}"
+
+
+def fmt_signed_int(n: int) -> str:
+    n_int = int(n)
+    if n_int < 0:
+        return fmt_int(n_int)
+    return "+" + fmt_int(n_int)
 
 
 def trunc(s: str, max_len: int) -> str:
@@ -72,7 +115,7 @@ def render_year_in_review(
     )
     lines.append(
         f"Bootstraps: {'included' if include_bootstraps else 'excluded'} "
-        f"(thresholds: changed>={bootstrap_cfg.changed_threshold}, files>={bootstrap_cfg.files_threshold}, add_ratio>={bootstrap_cfg.addition_ratio:.2f})"
+        f"(thresholds: changed>={fmt_int(bootstrap_cfg.changed_threshold)}, files>={fmt_int(bootstrap_cfg.files_threshold)}, add_ratio>={bootstrap_cfg.addition_ratio:.2f})"
     )
     if include_remote_prefixes:
         lines.append(f"Remote filter: {', '.join(include_remote_prefixes)}")
@@ -192,7 +235,7 @@ def render_yoy_year_in_review(
         old = int(agg0.get(key, 0))
         new = int(agg1.get(key, 0))
         delta = new - old
-        delta_s = f"{delta:+,}"
+        delta_s = fmt_signed_int(delta)
         return f"{label:18} {fmt_int(old):>12} -> {fmt_int(new):>12}   {delta_s:>12}   {pct_change(old, new):>8}"
 
     lines: list[str] = []
@@ -224,7 +267,7 @@ def render_yoy_year_in_review(
         old = int(langs0.get(lang, {}).get("changed", 0))
         new = int(langs1.get(lang, {}).get("changed", 0))
         delta = new - old
-        delta_s = f"{delta:+,}"
+        delta_s = fmt_signed_int(delta)
         lines.append(
             f"{trunc(lang, 18):18} {fmt_int(old):>12} -> {fmt_int(new):>12}   {delta_s:>12}   {pct_change(old, new):>8}"
         )
@@ -241,7 +284,7 @@ def pct_change(old: int, new: int) -> str:
     if rounded == 0:
         return "+0%"
     sign = "+" if pct >= 0 else "-"
-    return f"{sign}{rounded}%"
+    return f"{sign}{fmt_int(rounded)}%"
 
 
 def write_comparison_md(
@@ -270,7 +313,7 @@ def write_comparison_md(
     lines: list[str] = []
     lines.append(f"# Git comparison: {a} → {b}")
     lines.append("")
-    lines.append(f"Repos analyzed: {int(y0.get('repos_total', 0)):,} ({a}), {int(y1.get('repos_total', 0)):,} ({b})")
+    lines.append(f"Repos analyzed: {fmt_int(int(y0.get('repos_total', 0)))} ({a}), {fmt_int(int(y1.get('repos_total', 0)))} ({b})")
     lines.append("")
     lines.append(f"## Totals ({'including' if include_bootstraps else 'excluding'} bootstraps)")
     lines.append("")
@@ -280,7 +323,7 @@ def write_comparison_md(
     def row(metric: str, key: str) -> None:
         old = int(y0[key])
         new = int(y1[key])
-        lines.append(f"| {metric} | {old:,} | {new:,} | {new-old:+,} | {pct_change(old, new)} |")
+        lines.append(f"| {metric} | {fmt_int(old)} | {fmt_int(new)} | {fmt_signed_int(new-old)} | {pct_change(old, new)} |")
 
     row("Repos with commits", "repos_with_commits")
     row("Repos with my commits", "repos_with_my_commits")
@@ -329,7 +372,7 @@ def write_comparison_md(
         assert y0_boot is not None and y1_boot is not None
         old = int(y0_boot.get(key, 0))
         new = int(y1_boot.get(key, 0))
-        lines.append(f"| {metric} | {old:,} | {new:,} | {new-old:+,} | {pct_change(old, new)} |")
+        lines.append(f"| {metric} | {fmt_int(old)} | {fmt_int(new)} | {fmt_signed_int(new-old)} | {pct_change(old, new)} |")
 
     if y0_boot is not None and y1_boot is not None:
         lines.append("## Bootstraps (totals)")
@@ -355,7 +398,7 @@ def write_comparison_md(
         def incl_row(metric: str, key: str) -> None:
             old = int(y0_incl.get(key, 0))
             new = int(y1_incl.get(key, 0))
-            lines.append(f"| {metric} | {old:,} | {new:,} | {new-old:+,} | {pct_change(old, new)} |")
+            lines.append(f"| {metric} | {fmt_int(old)} | {fmt_int(new)} | {fmt_signed_int(new-old)} | {pct_change(old, new)} |")
 
         incl_row("Repos with commits", "repos_with_commits")
         incl_row("Repos with my commits", "repos_with_my_commits")
@@ -380,7 +423,7 @@ def write_comparison_md(
         for lang in sort_keys_by_pct_change(languages0, languages1, "changed", langs):
             old = int(languages0.get(lang, {}).get("changed", 0))
             new = int(languages1.get(lang, {}).get("changed", 0))
-            lines.append(f"| {lang} | {old:,} | {new:,} | {new-old:+,} | {pct_change(old, new)} |")
+            lines.append(f"| {lang} | {fmt_int(old)} | {fmt_int(new)} | {fmt_signed_int(new-old)} | {pct_change(old, new)} |")
         lines.append("")
 
         lines.append(f"## Languages (my changed lines, {'including' if include_bootstraps else 'excluding'} bootstraps)")
@@ -391,7 +434,7 @@ def write_comparison_md(
         for lang in sort_keys_by_pct_change(languages0, languages1, "changed_me", langs):
             old = int(languages0.get(lang, {}).get("changed_me", 0))
             new = int(languages1.get(lang, {}).get("changed_me", 0))
-            lines.append(f"| {lang} | {old:,} | {new:,} | {new-old:+,} | {pct_change(old, new)} |")
+            lines.append(f"| {lang} | {fmt_int(old)} | {fmt_int(new)} | {fmt_signed_int(new-old)} | {pct_change(old, new)} |")
         lines.append("")
 
     if dirs0 is not None and dirs1 is not None:
@@ -403,7 +446,7 @@ def write_comparison_md(
         for d in sort_keys_by_pct_change(dirs0, dirs1, "changed", dirs):
             old = int(dirs0.get(d, {}).get("changed", 0))
             new = int(dirs1.get(d, {}).get("changed", 0))
-            lines.append(f"| {d} | {old:,} | {new:,} | {new-old:+,} | {pct_change(old, new)} |")
+            lines.append(f"| {d} | {fmt_int(old)} | {fmt_int(new)} | {fmt_signed_int(new-old)} | {pct_change(old, new)} |")
         lines.append("")
 
         lines.append(f"## Directories (my changed lines, {'including' if include_bootstraps else 'excluding'} bootstraps)")
@@ -414,7 +457,7 @@ def write_comparison_md(
         for d in sort_keys_by_pct_change(dirs0, dirs1, "changed_me", dirs):
             old = int(dirs0.get(d, {}).get("changed_me", 0))
             new = int(dirs1.get(d, {}).get("changed_me", 0))
-            lines.append(f"| {d} | {old:,} | {new:,} | {new-old:+,} | {pct_change(old, new)} |")
+            lines.append(f"| {d} | {fmt_int(old)} | {fmt_int(new)} | {fmt_signed_int(new-old)} | {pct_change(old, new)} |")
         lines.append("")
 
     if languages0_boot is not None and languages1_boot is not None:
@@ -426,7 +469,7 @@ def write_comparison_md(
         for lang in sort_keys_by_pct_change(languages0_boot, languages1_boot, "changed", langs):
             old = int(languages0_boot.get(lang, {}).get("changed", 0))
             new = int(languages1_boot.get(lang, {}).get("changed", 0))
-            lines.append(f"| {lang} | {old:,} | {new:,} | {new-old:+,} | {pct_change(old, new)} |")
+            lines.append(f"| {lang} | {fmt_int(old)} | {fmt_int(new)} | {fmt_signed_int(new-old)} | {pct_change(old, new)} |")
         lines.append("")
 
     if dirs0_boot is not None and dirs1_boot is not None:
@@ -438,7 +481,7 @@ def write_comparison_md(
         for d in sort_keys_by_pct_change(dirs0_boot, dirs1_boot, "changed", dirs):
             old = int(dirs0_boot.get(d, {}).get("changed", 0))
             new = int(dirs1_boot.get(d, {}).get("changed", 0))
-            lines.append(f"| {d} | {old:,} | {new:,} | {new-old:+,} | {pct_change(old, new)} |")
+            lines.append(f"| {d} | {fmt_int(old)} | {fmt_int(new)} | {fmt_signed_int(new-old)} | {pct_change(old, new)} |")
         lines.append("")
 
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")

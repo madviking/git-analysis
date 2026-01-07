@@ -45,8 +45,8 @@ Backend storage should treat these as categorical enum-like values (string).
 
 The publish wizard persists defaults in `config.json` under `upload_config.*` (previously documented as `publish.*`):
 - `upload_config.default_publish`
+- `upload_config.upload_years` (calendar years to upload; 2025 is always included)
 - `upload_config.publisher`
-- `upload_config.repo_url_privacy`
 - `upload_config.publisher_token_path`
 - `upload_config.api_url` (server base URL)
 - `upload_config.automatic_upload` (`confirm` | `always` | `never`, with tolerant parsing of yes/no-like values)
@@ -56,3 +56,25 @@ The publish wizard persists defaults in `config.json` under `upload_config.*` (p
 
 Toolkit now supports `config.json["excluded_repos"]` (list of glob patterns) to skip specific repos by path under `--root`.
 This impacts which repos make it into the upload package (and the weekly aggregates), but does not change schema.
+
+## 4) Weekly time series: per-week technologies breakdown (me-only)
+
+`weekly.definition` includes `technology_kind: "language_for_path"` and each weekly row may include a `technologies` array.
+
+Notes:
+- Uploads include only the user's own ("me") data and exclude bootstraps.
+- `weekly.series_by_period[<YYYY>]` is a list of weekly rows (no `excl_bootstraps`/`including_bootstraps` split).
+- The payload also includes `year_totals` (totals per uploaded year).
+
+```json
+{
+  "week_start": "2025-01-06T00:00:00Z",
+  "commits": 12,
+  "insertions": 123,
+  "deletions": 45,
+  "changed": 168,
+  "technologies": [
+    { "technology": "Python", "commits": 6, "insertions": 80, "deletions": 20, "changed": 100 }
+  ]
+}
+```

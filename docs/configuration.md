@@ -43,6 +43,7 @@ Publishing uses an interactive wizard. The wizard persists defaults under:
     "automatic_upload": "confirm",
     "api_url": "",
     "default_publish": false,
+    "upload_years": [2024, 2025],
     "llm_coding": {
       "started_at": null,
       "dominant_at": null,
@@ -50,7 +51,6 @@ Publishing uses an interactive wizard. The wizard persists defaults under:
       "primary_tool_current": "none"
     },
     "publisher": "",
-    "repo_url_privacy": "none",
     "publisher_token_path": "~/.config/git-analysis/publisher_token"
   }
 }
@@ -62,6 +62,7 @@ Notes:
 - `publisher` is not verified (no OAuth).
 - If `publisher` is blank, the public identity is a derived pseudonym.
 - `publisher_token_path` is a local secret used for replace semantics; keep it private.
+- `upload_years` controls which full years are included in uploads; uploads always include 2025 even if not listed.
 
 ## Upload server URL
 The upload destination is stored in `config.json` under `upload_config.api_url`.

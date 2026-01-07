@@ -50,6 +50,12 @@ class RepoResult:
     period_stats_bootstraps: dict[str, RepoYearStats]
     weekly_by_period_excl_bootstraps: dict[str, dict[str, dict[str, int]]]  # week_start -> {commits,insertions,deletions}
     weekly_by_period_bootstraps: dict[str, dict[str, dict[str, int]]]  # week_start -> {commits,insertions,deletions}
+    weekly_tech_by_period_excl_bootstraps: dict[str, dict[str, dict[str, dict[str, int]]]]  # week_start -> tech -> {commits,insertions,deletions}
+    weekly_tech_by_period_bootstraps: dict[str, dict[str, dict[str, dict[str, int]]]]  # week_start -> tech -> {commits,insertions,deletions}
+    me_weekly_by_period_excl_bootstraps: dict[str, dict[str, dict[str, int]]]  # week_start -> {commits,insertions,deletions}
+    me_weekly_by_period_bootstraps: dict[str, dict[str, dict[str, int]]]  # week_start -> {commits,insertions,deletions}
+    me_weekly_tech_by_period_excl_bootstraps: dict[str, dict[str, dict[str, dict[str, int]]]]  # week_start -> tech -> {commits,insertions,deletions}
+    me_weekly_tech_by_period_bootstraps: dict[str, dict[str, dict[str, dict[str, int]]]]  # week_start -> tech -> {commits,insertions,deletions}
     authors_by_period_excl_bootstraps: dict[str, dict[str, AuthorStats]]  # email -> stats
     authors_by_period_bootstraps: dict[str, dict[str, AuthorStats]]  # email -> stats
     languages_by_period_excl_bootstraps: dict[str, dict[str, dict[str, int]]]  # language -> {insertions,deletions}

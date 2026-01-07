@@ -12,6 +12,7 @@ from .analysis_aggregate import (
     aggregate_me_monthly_tech,
     aggregate_period,
     aggregate_weekly,
+    aggregate_weekly_tech,
 )
 from .analysis_periods import Period, month_labels_for_period
 from .analysis_render import render_comparison_txt_from_md, render_year_in_review, render_yoy_year_in_review, write_comparison_md
@@ -330,9 +331,32 @@ def write_reports(
         weekly_boot = aggregate_weekly(results, label, include_bootstraps=False, bootstraps_only=True)
         weekly_incl = aggregate_weekly(results, label, include_bootstraps=True)
 
-        def weekly_rows(w: dict[str, dict[str, int]]) -> list[dict[str, int | str]]:
+        weekly_tech_excl = aggregate_weekly_tech(results, label, include_bootstraps=False)
+        weekly_tech_boot = aggregate_weekly_tech(results, label, include_bootstraps=False, bootstraps_only=True)
+        weekly_tech_incl = aggregate_weekly_tech(results, label, include_bootstraps=True)
+
+        def weekly_rows(w: dict[str, dict[str, int]], tech: dict[str, dict[str, dict[str, int]]]) -> list[dict[str, object]]:
             rows: list[dict[str, int | str]] = []
-            for week_start, st in sorted(w.items(), key=lambda kv: kv[0]):
+            keys = sorted(set(w.keys()) | set(tech.keys()))
+            for week_start in keys:
+                st = w.get(week_start, {})
+                techs = tech.get(week_start, {})
+                tech_rows: list[dict[str, int | str]] = []
+                for tname, tst in techs.items():
+                    changed = int(tst.get("changed", 0))
+                    commits = int(tst.get("commits", 0))
+                    if changed <= 0 and commits <= 0:
+                        continue
+                    tech_rows.append(
+                        {
+                            "technology": tname,
+                            "commits": commits,
+                            "insertions": int(tst.get("insertions", 0)),
+                            "deletions": int(tst.get("deletions", 0)),
+                            "changed": changed,
+                        }
+                    )
+                tech_rows.sort(key=lambda r: (-int(r.get("changed", 0)), str(r.get("technology", "")).lower()))
                 rows.append(
                     {
                         "week_start": week_start,
@@ -340,6 +364,7 @@ def write_reports(
                         "insertions": int(st.get("insertions", 0)),
                         "deletions": int(st.get("deletions", 0)),
                         "changed": int(st.get("changed", 0)),
+                        "technologies": tech_rows,
                     }
                 )
             return rows
@@ -351,14 +376,15 @@ def write_reports(
                 "period": label,
                 "start": period.start_iso,
                 "end": period.end_iso,
+                "technology_kind": "language_for_path",
                 "definition": {
                     "bucket": "week_start_monday_00_00_00Z",
                     "timestamp_source": "author_time_%aI_converted_to_utc",
                 },
                 "series": {
-                    "excl_bootstraps": weekly_rows(weekly_excl),
-                    "bootstraps": weekly_rows(weekly_boot),
-                    "including_bootstraps": weekly_rows(weekly_incl),
+                    "excl_bootstraps": weekly_rows(weekly_excl, weekly_tech_excl),
+                    "bootstraps": weekly_rows(weekly_boot, weekly_tech_boot),
+                    "including_bootstraps": weekly_rows(weekly_incl, weekly_tech_incl),
                 },
             },
         )

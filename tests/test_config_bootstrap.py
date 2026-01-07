@@ -41,7 +41,14 @@ def test_ensure_config_file_creates_from_template_and_infers(tmp_path: Path, mon
                 "me_github_usernames": [],
                 "include_remote_prefixes": [],
                 "remote_name_priority": ["origin", "upstream"],
-                "upload_config": {"automatic_upload": "confirm", "api_url": "", "publisher": "", "repo_url_privacy": "none", "publisher_token_path": ""},
+                "upload_config": {
+                    "automatic_upload": "confirm",
+                    "api_url": "",
+                    "publisher": "",
+                    "upload_years": [2024, 2025],
+                    "publisher_token_path": "",
+                    "llm_coding": {},
+                },
                 "excluded_repos": [],
                 "remote_filter_mode": "any",
                 "exclude_forks": True,
@@ -68,4 +75,3 @@ def test_ensure_config_file_creates_from_template_and_infers(tmp_path: Path, mon
     assert cfg["me_emails"] == ["you@example.com"]
     assert cfg["me_names"] == ["Your Name"]
     assert cfg["include_remote_prefixes"] == ["github.com/org1", "github.com/org2"]
-

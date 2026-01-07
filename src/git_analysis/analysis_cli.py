@@ -39,12 +39,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Override `upload_config.api_url` (or provide full /api/v1/uploads URL).",
     )
     parser.add_argument("--publisher", type=str, default="", help="Public identity string (optional; not verified).")
-    parser.add_argument(
-        "--repo-url-privacy",
-        choices=["none", "public_only", "all"],
-        default="",
-        help="Which repo URLs to include in the upload package.",
-    )
     parser.add_argument("--publisher-token-path", type=Path, default=None, help="Path to persist the local publisher token.")
     return parser
 

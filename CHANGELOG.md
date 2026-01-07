@@ -15,11 +15,14 @@ The format is based on Keep a Changelog, and this project follows SemVer where a
 - LLM tooling metadata collection in the publish wizard (inflection points + standardized tool enums) and include it in `upload_package_v1` as `llm_coding`.
 - Startup ASCII header describing what the run will do and where outputs are written.
 - `llm_inflection_stats` comparison report based on `upload_config.llm_coding.dominant_at`.
+- Weekly time series now includes per-week technology (language) breakdowns (`technologies` per week).
 
 ### Changed
 - Upload/publish defaults now persist under `config.json` → `upload_config.*` (backward-compatible read of legacy `publish` block remains).
 - Upload destination now comes from `upload_config.api_url` (or `--upload-url`); legacy `server.json`/`server-config.json` are no longer used.
+- Upload payload now contains only “me” stats, excludes bootstrap series, excludes all repo identifiers/URLs, adds `year_totals`, and prompts for which full years to upload (2025 always included).
 - Rendered percentages no longer include decimals (e.g. `+33%` instead of `+33.3%`).
+- Report `.txt`/`.md` outputs abbreviate large numbers (e.g. `1K`, `2.5M`) including large percentage deltas.
 - Expanded default exclusion lists in `config-template.json` for common build/cache directories and generated paths.
 - When `upload_config` is already set up, the publish wizard skips re-prompting for setup values and reminds you to edit `config.json` instead.
 - Comparison markdown is written to `reports/.../markup/` (root keeps `comparison_*.txt`).

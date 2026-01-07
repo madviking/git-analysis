@@ -55,11 +55,11 @@ def test_upload_cli_uploads_existing_report_dir(tmp_path: Path) -> None:
         "schema_version": "upload_package_v1",
         "generated_at": "2025-01-01T00:00:00Z",
         "toolkit_version": "0.1.0",
+        "data_scope": "me",
         "publisher": {"kind": "user_provided", "value": "Alice"},
-        "privacy": {"mode": "none", "verification_opt_in": False},
         "periods": [{"label": "2025", "start": "2025-01-01", "end": "2026-01-01"}],
         "weekly": {"definition": {"bucket": "week_start_monday_00_00_00Z", "timestamp_source": "author_time"}, "series_by_period": {}},
-        "repos": [{"repo_key": "k"}],
+        "year_totals": [{"year": 2025, "totals": {"commits": 0, "insertions": 0, "deletions": 0, "changed": 0}}],
     }
     payload_bytes = canonical_json_bytes(payload)
     (report_dir / "json" / "upload_package_v1.json").write_bytes(payload_bytes)
@@ -91,4 +91,3 @@ def test_upload_cli_uploads_existing_report_dir(tmp_path: Path) -> None:
 
     payload2 = received.get("payload") or {}
     assert payload2.get("schema_version") == "upload_package_v1"
-

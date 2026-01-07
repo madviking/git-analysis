@@ -8,11 +8,11 @@ import re
 from pathlib import Path
 
 from . import __version__
-from .analysis_aggregate import aggregate_weekly
+from .analysis_aggregate import aggregate_weekly_me, aggregate_weekly_me_tech
 from .analysis_periods import Period
 from .config import load_config, save_config
 from .models import RepoResult
-from .upload_package_v1 import build_upload_package_v1, canonical_json_bytes, ensure_publisher_token, upload_package_v1
+from .upload_package_v1 import canonical_json_bytes, ensure_publisher_token, upload_package_v1
 
 
 def default_publisher_token_path() -> Path:
@@ -204,8 +204,8 @@ def _upload_url_from_api_url(api_url: str) -> str:
 class PublishInputs:
     publish: bool
     publisher: str
-    repo_url_privacy: str
     publisher_token_path: Path
+    upload_years: list[int]
 
 
 def _load_upload_cfg(config_path: Path) -> dict[str, object]:
@@ -226,18 +226,65 @@ def _save_upload_api_url(config_path: Path, api_url: str) -> None:
 
 def _upload_config_is_setup(upload_cfg: dict[str, object]) -> bool:
     token_path = str(upload_cfg.get("publisher_token_path", "") or "").strip()
-    repo_priv = str(upload_cfg.get("repo_url_privacy", "") or "").strip().lower()
     llm_coding = upload_cfg.get("llm_coding")
     if not token_path:
-        return False
-    if repo_priv not in ("none", "public_only", "all"):
         return False
     if not isinstance(llm_coding, dict):
         return False
     return True
 
 
-def collect_publish_inputs(*, args: object, config_path: Path, config: dict) -> PublishInputs:
+def _years_from_periods(periods: list[Period]) -> list[int]:
+    years: set[int] = set()
+    for p in periods:
+        label = str(p.label or "").strip()
+        if len(label) >= 4 and label[:4].isdigit():
+            years.add(int(label[:4]))
+    return sorted(years)
+
+
+def _prompt_upload_years(*, upload_cfg: dict[str, object], report_periods: list[Period]) -> list[int]:
+    existing = upload_cfg.get("upload_years")
+    default_years: list[int] = []
+    if isinstance(existing, list) and all(isinstance(y, int) or (isinstance(y, str) and str(y).isdigit()) for y in existing):
+        default_years = sorted({int(y) for y in existing})
+    if not default_years:
+        default_years = _years_from_periods(report_periods)
+    if 2025 not in default_years:
+        default_years.append(2025)
+        default_years = sorted(set(default_years))
+
+    print("Upload data is always sent as full calendar years (Jan 1 .. Jan 1).")
+    print("Reports may use different periods, so the uploaded dataset can differ from the generated report.")
+    print("Note: 2025 is always included.")
+    default_s = ",".join(str(y) for y in default_years)
+    ans = _prompt_str("Years to include in upload (comma-separated YYYY)", default=default_s).strip()
+    if not ans:
+        years = default_years
+    else:
+        toks: list[str] = []
+        for part in ans.replace(",", " ").split():
+            part = part.strip()
+            if part:
+                toks.append(part)
+        parsed: list[int] = []
+        for t in toks:
+            if not t.isdigit():
+                parsed = []
+                break
+            y = int(t)
+            if y < 1970 or y > 2100:
+                parsed = []
+                break
+            parsed.append(y)
+        years = sorted(set(parsed)) if parsed else default_years
+    if 2025 not in years:
+        years = sorted(set(years + [2025]))
+    upload_cfg["upload_years"] = years
+    return years
+
+
+def collect_publish_inputs(*, args: object, config_path: Path, config: dict, report_periods: list[Period]) -> PublishInputs:
     upload_cfg = dict((config.get("upload_config") or {}) if isinstance(config.get("upload_config"), dict) else {})
     if not upload_cfg and isinstance(config.get("publish"), dict):
         upload_cfg = dict(config.get("publish") or {})
@@ -261,7 +308,10 @@ def collect_publish_inputs(*, args: object, config_path: Path, config: dict) -> 
     if not publish:
         config["upload_config"] = upload_cfg
         save_config(config_path, config)
-        return PublishInputs(publish=False, publisher="", repo_url_privacy="none", publisher_token_path=default_publisher_token_path())
+        return PublishInputs(publish=False, publisher="", publisher_token_path=default_publisher_token_path(), upload_years=[])
+
+    upload_years = _prompt_upload_years(upload_cfg=upload_cfg, report_periods=report_periods)
+    upload_cfg["upload_years"] = upload_years
 
     if _upload_config_is_setup(upload_cfg):
         print("Upload settings are already configured. Edit config.json (upload_config.*) to update them.")
@@ -270,8 +320,6 @@ def collect_publish_inputs(*, args: object, config_path: Path, config: dict) -> 
         publisher = str(getattr(args, "publisher", "") or "").strip()
         if not publisher:
             publisher = str(upload_cfg.get("publisher", "") or "").strip()
-
-        repo_url_privacy = str(upload_cfg.get("repo_url_privacy", "none") or "none").strip().lower()
 
         arg_token_path = getattr(args, "publisher_token_path", None)
         token_path_s = str(upload_cfg.get("publisher_token_path", "") or "").strip()
@@ -282,15 +330,11 @@ def collect_publish_inputs(*, args: object, config_path: Path, config: dict) -> 
         config["upload_config"] = upload_cfg
         save_config(config_path, config)
 
-        return PublishInputs(publish=True, publisher=publisher, repo_url_privacy=repo_url_privacy, publisher_token_path=token_path)
+        return PublishInputs(publish=True, publisher=publisher, publisher_token_path=token_path, upload_years=upload_years)
 
     arg_publisher = str(getattr(args, "publisher", "") or "").strip()
     publisher_default = arg_publisher or str(upload_cfg.get("publisher", "") or "").strip()
     publisher = _prompt_str("Public identity (blank for pseudonym)", default=publisher_default).strip()
-
-    arg_priv = str(getattr(args, "repo_url_privacy", "") or "").strip().lower()
-    priv_default = arg_priv or str(upload_cfg.get("repo_url_privacy", "none") or "none").strip().lower()
-    repo_url_privacy = _prompt_choice("Repo URL privacy mode", choices=("none", "public_only", "all"), default=priv_default)
 
     arg_token_path = getattr(args, "publisher_token_path", None)
     token_default = str(upload_cfg.get("publisher_token_path", "") or "").strip()
@@ -301,13 +345,12 @@ def collect_publish_inputs(*, args: object, config_path: Path, config: dict) -> 
     token_path = Path(_prompt_str("Publisher token path", default=token_default)).expanduser()
 
     upload_cfg["publisher"] = publisher
-    upload_cfg["repo_url_privacy"] = repo_url_privacy
     upload_cfg["publisher_token_path"] = str(token_path)
     upload_cfg["llm_coding"] = _prompt_llm_coding(upload_cfg)
     config["upload_config"] = upload_cfg
     save_config(config_path, config)
 
-    return PublishInputs(publish=True, publisher=publisher, repo_url_privacy=repo_url_privacy, publisher_token_path=token_path)
+    return PublishInputs(publish=True, publisher=publisher, publisher_token_path=token_path, upload_years=upload_years)
 
 
 def build_upload_payload_from_results(
@@ -316,21 +359,39 @@ def build_upload_payload_from_results(
     results: list[RepoResult],
     publisher_kind: str,
     publisher_value: str,
-    privacy_mode: str,
     llm_coding: dict[str, object] | None = None,
 ) -> dict:
     generated_at = dt.datetime.now(tz=dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    weekly_by_period: dict[str, dict[str, list[dict[str, int | str]]]] = {}
+    weekly_by_period: dict[str, list[dict[str, int | str]]] = {}
+    year_totals: list[dict[str, object]] = []
     for p in periods:
         label = p.label
-        weekly_excl = aggregate_weekly(results, label, include_bootstraps=False)
-        weekly_boot = aggregate_weekly(results, label, include_bootstraps=False, bootstraps_only=True)
-        weekly_incl = aggregate_weekly(results, label, include_bootstraps=True)
+        weekly_excl = aggregate_weekly_me(results, label, include_bootstraps=False)
+        weekly_tech_excl = aggregate_weekly_me_tech(results, label, include_bootstraps=False)
 
-        def rows(w: dict[str, dict[str, int]]) -> list[dict[str, int | str]]:
+        def rows(w: dict[str, dict[str, int]], tech: dict[str, dict[str, dict[str, int]]]) -> list[dict[str, object]]:
             out: list[dict[str, int | str]] = []
-            for week_start, st in sorted(w.items(), key=lambda kv: kv[0]):
+            keys = sorted(set(w.keys()) | set(tech.keys()))
+            for week_start in keys:
+                st = w.get(week_start, {})
+                techs = tech.get(week_start, {})
+                tech_rows: list[dict[str, int | str]] = []
+                for tname, tst in techs.items():
+                    changed = int(tst.get("changed", 0))
+                    commits = int(tst.get("commits", 0))
+                    if changed <= 0 and commits <= 0:
+                        continue
+                    tech_rows.append(
+                        {
+                            "technology": tname,
+                            "commits": commits,
+                            "insertions": int(tst.get("insertions", 0)),
+                            "deletions": int(tst.get("deletions", 0)),
+                            "changed": changed,
+                        }
+                    )
+                tech_rows.sort(key=lambda r: (-int(r.get("changed", 0)), str(r.get("technology", "")).lower()))
                 out.append(
                     {
                         "week_start": week_start,
@@ -338,40 +399,62 @@ def build_upload_payload_from_results(
                         "insertions": int(st.get("insertions", 0)),
                         "deletions": int(st.get("deletions", 0)),
                         "changed": int(st.get("changed", 0)),
+                        "technologies": tech_rows,
                     }
                 )
             return out
 
-        weekly_by_period[label] = {
-            "excl_bootstraps": rows(weekly_excl),
-            "bootstraps": rows(weekly_boot),
-            "including_bootstraps": rows(weekly_incl),
-        }
+        weekly_by_period[label] = rows(weekly_excl, weekly_tech_excl)
+
+        year = int(label) if str(label).isdigit() else label
+        commits = 0
+        insertions = 0
+        deletions = 0
+        for r in results:
+            st = r.period_stats_excl_bootstraps.get(label)
+            if st is None:
+                continue
+            commits += int(st.commits_me)
+            insertions += int(st.insertions_me)
+            deletions += int(st.deletions_me)
+        year_totals.append(
+            {
+                "year": year,
+                "totals": {
+                    "commits": commits,
+                    "insertions": insertions,
+                    "deletions": deletions,
+                    "changed": insertions + deletions,
+                },
+            }
+        )
 
     base = {
         "schema_version": "upload_package_v1",
         "generated_at": generated_at,
         "toolkit_version": __version__,
+        "data_scope": "me",
         "publisher": {"kind": publisher_kind, "value": publisher_value},
         "periods": [{"label": p.label, "start": p.start_iso, "end": p.end_iso} for p in periods],
+        "year_totals": year_totals,
         "weekly": {
             "definition": {
                 "bucket": "week_start_monday_00_00_00Z",
                 "timestamp_source": "author_time_%aI_converted_to_utc",
+                "technology_kind": "language_for_path",
             },
             "series_by_period": weekly_by_period,
         },
     }
     if isinstance(llm_coding, dict) and llm_coding:
         base["llm_coding"] = llm_coding
-    repos = [{"repo_key": r.key, "remote_canonical": r.remote_canonical} for r in results]
-    return build_upload_package_v1(base=base, repos=repos, privacy_mode=privacy_mode)
+    return base
 
 
 def publish_with_wizard(
     *,
     report_dir: Path,
-    periods: list[Period],
+    upload_periods: list[Period],
     results: list[RepoResult],
     inputs: PublishInputs,
     config_path: Path,
@@ -389,19 +472,14 @@ def publish_with_wizard(
         publisher_kind = "user_provided"
         publisher_value = pub
 
-    priv = (inputs.repo_url_privacy or "").strip().lower()
-    if priv not in ("none", "public_only", "all"):
-        priv = "none"
-
     upload_cfg = _load_upload_cfg(config_path)
     llm_coding = upload_cfg.get("llm_coding") if isinstance(upload_cfg.get("llm_coding"), dict) else None
 
     payload = build_upload_payload_from_results(
-        periods=periods,
+        periods=upload_periods,
         results=results,
         publisher_kind=publisher_kind,
         publisher_value=publisher_value,
-        privacy_mode=priv,
         llm_coding=llm_coding,
     )
     payload_bytes = canonical_json_bytes(payload)
@@ -409,18 +487,12 @@ def publish_with_wizard(
 
     preview = dict(payload)
     preview["publisher_token_hint"] = hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
-    exposed = [r.get("remote_canonical") for r in (payload.get("repos") or []) if isinstance(r, dict) and r.get("remote_canonical")]
     print(json_preview(preview))
     print(f"\nPayload SHA-256: {sha}")
 
     out_path = report_dir / "json" / "upload_package_v1.json"
     out_path.write_bytes(payload_bytes)
     print(f"Full payload written to: {out_path}")
-
-    if exposed:
-        print("Exposed repo URLs:")
-        for u in exposed:
-            print(f"- {u}")
 
     mode = str(upload_cfg.get("automatic_upload", "confirm") or "confirm").strip().lower()
     if mode in ("no", "never", "false", "0"):
@@ -502,6 +574,31 @@ def upload_existing_report_dir(
         print(f"Error: failed to parse payload JSON: {e}")
         return 2
 
+    if not isinstance(payload_obj, dict):
+        print("Error: upload payload must be a JSON object")
+        return 2
+    if "repos" in payload_obj or "privacy" in payload_obj:
+        print("Error: upload payload includes repo/privacy fields; refusing to upload")
+        return 2
+    if str(payload_obj.get("data_scope", "") or "").strip().lower() != "me":
+        print("Error: upload payload must declare data_scope='me'; refusing to upload")
+        return 2
+    if not isinstance(payload_obj.get("year_totals"), list):
+        print("Error: upload payload missing year_totals; refusing to upload")
+        return 2
+    weekly = payload_obj.get("weekly")
+    if not isinstance(weekly, dict):
+        print("Error: upload payload missing weekly; refusing to upload")
+        return 2
+    series_by_period = weekly.get("series_by_period")
+    if not isinstance(series_by_period, dict):
+        print("Error: upload payload missing weekly.series_by_period; refusing to upload")
+        return 2
+    for k, v in series_by_period.items():
+        if not isinstance(k, str) or not isinstance(v, list):
+            print("Error: upload payload weekly.series_by_period must map period label -> list; refusing to upload")
+            return 2
+
     payload_bytes = canonical_json_bytes(payload_obj)
     sha = hashlib.sha256(payload_bytes).hexdigest()
 
@@ -515,18 +612,6 @@ def upload_existing_report_dir(
     print(json_preview(preview))
     print(f"\nPayload SHA-256: {sha}")
     print(f"Full payload read from: {payload_path}")
-
-    exposed = []
-    if isinstance(payload_obj, dict):
-        exposed = [
-            r.get("remote_canonical")
-            for r in (payload_obj.get("repos") or [])
-            if isinstance(r, dict) and r.get("remote_canonical")
-        ]
-    if exposed:
-        print("Exposed repo URLs:")
-        for u in exposed:
-            print(f"- {u}")
 
     mode = str(upload_cfg.get("automatic_upload", "confirm") or "confirm").strip().lower()
     if assume_yes:

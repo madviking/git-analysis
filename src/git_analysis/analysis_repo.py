@@ -45,6 +45,12 @@ def parse_numstat_stream(
     RepoYearStats,  # bootstraps only
     dict[str, dict[str, int]],  # weekly excl: week_start -> {commits,insertions,deletions}
     dict[str, dict[str, int]],  # weekly bootstraps: week_start -> {commits,insertions,deletions}
+    dict[str, dict[str, dict[str, int]]],  # weekly tech excl: week_start -> tech -> {commits,insertions,deletions}
+    dict[str, dict[str, dict[str, int]]],  # weekly tech boot: week_start -> tech -> {commits,insertions,deletions}
+    dict[str, dict[str, int]],  # me weekly excl: week_start -> {commits,insertions,deletions}
+    dict[str, dict[str, int]],  # me weekly boot: week_start -> {commits,insertions,deletions}
+    dict[str, dict[str, dict[str, int]]],  # me weekly tech excl: week_start -> tech -> {commits,insertions,deletions}
+    dict[str, dict[str, dict[str, int]]],  # me weekly tech boot: week_start -> tech -> {commits,insertions,deletions}
     dict[str, AuthorStats],  # authors excl
     dict[str, AuthorStats],  # authors bootstraps
     dict[str, dict[str, int]],  # languages excl
@@ -80,6 +86,16 @@ def parse_numstat_stream(
     stats_boot = RepoYearStats()
     weekly_excl: dict[str, dict[str, int]] = defaultdict(lambda: {"commits": 0, "insertions": 0, "deletions": 0})
     weekly_boot: dict[str, dict[str, int]] = defaultdict(lambda: {"commits": 0, "insertions": 0, "deletions": 0})
+    weekly_tech_excl: dict[str, dict[str, dict[str, int]]] = defaultdict(lambda: defaultdict(lambda: {"commits": 0, "insertions": 0, "deletions": 0}))
+    weekly_tech_boot: dict[str, dict[str, dict[str, int]]] = defaultdict(lambda: defaultdict(lambda: {"commits": 0, "insertions": 0, "deletions": 0}))
+    me_weekly_excl: dict[str, dict[str, int]] = defaultdict(lambda: {"commits": 0, "insertions": 0, "deletions": 0})
+    me_weekly_boot: dict[str, dict[str, int]] = defaultdict(lambda: {"commits": 0, "insertions": 0, "deletions": 0})
+    me_weekly_tech_excl: dict[str, dict[str, dict[str, int]]] = defaultdict(
+        lambda: defaultdict(lambda: {"commits": 0, "insertions": 0, "deletions": 0})
+    )
+    me_weekly_tech_boot: dict[str, dict[str, dict[str, int]]] = defaultdict(
+        lambda: defaultdict(lambda: {"commits": 0, "insertions": 0, "deletions": 0})
+    )
     authors_excl: dict[str, AuthorStats] = {}
     authors_boot: dict[str, AuthorStats] = {}
     languages_excl: dict[str, dict[str, int]] = defaultdict(
@@ -135,6 +151,9 @@ def parse_numstat_stream(
         is_boot = bootstrap.is_bootstrap(current_insertions, current_deletions, current_files_touched) and current_sha not in excluded
         stats_target = stats_boot if is_boot else stats_excl
         weekly_target = weekly_boot if is_boot else weekly_excl
+        weekly_tech_target = weekly_tech_boot if is_boot else weekly_tech_excl
+        me_weekly_target = me_weekly_boot if is_boot else me_weekly_excl
+        me_weekly_tech_target = me_weekly_tech_boot if is_boot else me_weekly_tech_excl
         authors_target = authors_boot if is_boot else authors_excl
         langs_target = languages_boot if is_boot else languages_excl
         dirs_target = dirs_boot if is_boot else dirs_excl
@@ -148,6 +167,22 @@ def parse_numstat_stream(
             weekly_target[wk]["commits"] += 1
             weekly_target[wk]["insertions"] += current_insertions
             weekly_target[wk]["deletions"] += current_deletions
+            for tech, (ins, dele) in current_langs.items():
+                if (ins + dele) <= 0:
+                    continue
+                weekly_tech_target[wk][tech]["commits"] += 1
+                weekly_tech_target[wk][tech]["insertions"] += ins
+                weekly_tech_target[wk][tech]["deletions"] += dele
+            if current_author_is_me:
+                me_weekly_target[wk]["commits"] += 1
+                me_weekly_target[wk]["insertions"] += current_insertions
+                me_weekly_target[wk]["deletions"] += current_deletions
+                for tech, (ins, dele) in current_langs.items():
+                    if (ins + dele) <= 0:
+                        continue
+                    me_weekly_tech_target[wk][tech]["commits"] += 1
+                    me_weekly_tech_target[wk][tech]["insertions"] += ins
+                    me_weekly_tech_target[wk][tech]["deletions"] += dele
         if current_author_is_me:
             stats_target.commits_me += 1
             stats_target.insertions_me += current_insertions
@@ -232,6 +267,12 @@ def parse_numstat_stream(
             stats_boot,
             dict(weekly_excl),
             dict(weekly_boot),
+            {wk: dict(techs) for wk, techs in weekly_tech_excl.items()},
+            {wk: dict(techs) for wk, techs in weekly_tech_boot.items()},
+            dict(me_weekly_excl),
+            dict(me_weekly_boot),
+            {wk: dict(techs) for wk, techs in me_weekly_tech_excl.items()},
+            {wk: dict(techs) for wk, techs in me_weekly_tech_boot.items()},
             authors_excl,
             authors_boot,
             dict(languages_excl),
@@ -335,6 +376,12 @@ def parse_numstat_stream(
         stats_boot,
         dict(weekly_excl),
         dict(weekly_boot),
+        {wk: dict(techs) for wk, techs in weekly_tech_excl.items()},
+        {wk: dict(techs) for wk, techs in weekly_tech_boot.items()},
+        dict(me_weekly_excl),
+        dict(me_weekly_boot),
+        {wk: dict(techs) for wk, techs in me_weekly_tech_excl.items()},
+        {wk: dict(techs) for wk, techs in me_weekly_tech_boot.items()},
         authors_excl,
         authors_boot,
         dict(languages_excl),
@@ -375,6 +422,12 @@ def analyze_repo(
     period_stats_boot: dict[str, RepoYearStats] = {}
     weekly_by_period_excl: dict[str, dict[str, dict[str, int]]] = {}
     weekly_by_period_boot: dict[str, dict[str, dict[str, int]]] = {}
+    weekly_tech_by_period_excl: dict[str, dict[str, dict[str, dict[str, int]]]] = {}
+    weekly_tech_by_period_boot: dict[str, dict[str, dict[str, dict[str, int]]]] = {}
+    me_weekly_by_period_excl: dict[str, dict[str, dict[str, int]]] = {}
+    me_weekly_by_period_boot: dict[str, dict[str, dict[str, int]]] = {}
+    me_weekly_tech_by_period_excl: dict[str, dict[str, dict[str, dict[str, int]]]] = {}
+    me_weekly_tech_by_period_boot: dict[str, dict[str, dict[str, dict[str, int]]]] = {}
     authors_by_period_excl: dict[str, dict[str, AuthorStats]] = {}
     authors_by_period_boot: dict[str, dict[str, AuthorStats]] = {}
     languages_by_period_excl: dict[str, dict[str, dict[str, int]]] = {}
@@ -394,6 +447,12 @@ def analyze_repo(
             stats_boot_only,
             weekly_excl_boot,
             weekly_boot_only,
+            weekly_tech_excl_boot,
+            weekly_tech_boot_only,
+            me_weekly_excl_boot,
+            me_weekly_boot_only,
+            me_weekly_tech_excl_boot,
+            me_weekly_tech_boot_only,
             authors_excl_boot,
             authors_boot_only,
             langs_excl_boot,
@@ -421,6 +480,12 @@ def analyze_repo(
         period_stats_boot[period.label] = stats_boot_only
         weekly_by_period_excl[period.label] = weekly_excl_boot
         weekly_by_period_boot[period.label] = weekly_boot_only
+        weekly_tech_by_period_excl[period.label] = weekly_tech_excl_boot
+        weekly_tech_by_period_boot[period.label] = weekly_tech_boot_only
+        me_weekly_by_period_excl[period.label] = me_weekly_excl_boot
+        me_weekly_by_period_boot[period.label] = me_weekly_boot_only
+        me_weekly_tech_by_period_excl[period.label] = me_weekly_tech_excl_boot
+        me_weekly_tech_by_period_boot[period.label] = me_weekly_tech_boot_only
         authors_by_period_excl[period.label] = authors_excl_boot
         authors_by_period_boot[period.label] = authors_boot_only
         languages_by_period_excl[period.label] = langs_excl_boot
@@ -450,6 +515,12 @@ def analyze_repo(
         period_stats_bootstraps=period_stats_boot,
         weekly_by_period_excl_bootstraps=weekly_by_period_excl,
         weekly_by_period_bootstraps=weekly_by_period_boot,
+        weekly_tech_by_period_excl_bootstraps=weekly_tech_by_period_excl,
+        weekly_tech_by_period_bootstraps=weekly_tech_by_period_boot,
+        me_weekly_by_period_excl_bootstraps=me_weekly_by_period_excl,
+        me_weekly_by_period_bootstraps=me_weekly_by_period_boot,
+        me_weekly_tech_by_period_excl_bootstraps=me_weekly_tech_by_period_excl,
+        me_weekly_tech_by_period_bootstraps=me_weekly_tech_by_period_boot,
         authors_by_period_excl_bootstraps=authors_by_period_excl,
         authors_by_period_bootstraps=authors_by_period_boot,
         languages_by_period_excl_bootstraps=languages_by_period_excl,

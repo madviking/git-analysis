@@ -3,8 +3,8 @@
 Publishing is interactive and always prompts at run start whether to publish.
 
 The first time you publish (or if `upload_config` is missing), the wizard collects:
-1) Public identity (blank = derived pseudonym)
-2) Repo URL privacy mode: `none` | `public_only` | `all`
+1) Which years to include in the upload (full calendar years; 2025 is always included)
+2) Public identity (blank = derived pseudonym)
 3) Publisher token path (local secret)
 4) LLM coding inflection points (start date, “>90% by LLM” date)
 5) Primary LLM coding tool (initial + current) from a fixed list
@@ -15,13 +15,8 @@ If publishing is enabled, the tool will later:
 1) Print a payload preview (token redacted)
 2) Print the payload SHA-256 (canonical JSON bytes)
 3) Prompt for final confirmation before upload
-
-## Privacy modes
-- `none`: do not include repo URLs in the uploaded payload
-- `public_only`: include only known public hosts (currently `github.com`, `gitlab.com`, `bitbucket.org`)
-- `all`: include all `remote_canonical` values
-
-`verification_opt_in` is set automatically when privacy mode is `public_only` or `all`.
+ 
+Uploads contain only your own (“me”) stats (not aggregate stats across all authors) and contain no repo identifiers/URLs.
 
 ## Replace semantics / publisher token
 The client sends a stable `publisher_token` (a local secret) in the `X-Publisher-Token` header. The server should store only a hash and use it to identify the publisher for replace semantics.

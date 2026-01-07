@@ -67,9 +67,23 @@ def test_publish_wizard_persists_config_and_uploads(tmp_path: Path) -> None:
     _run(["git", "config", "user.email", "test@example.com"], cwd=repo)
     _run(["git", "remote", "add", "origin", "git@github.com:org/repo.git"], cwd=repo)
     _commit_file(repo=repo, filename="a.txt", content="a\n", author_date="2025-01-02T12:00:00Z")
+    # A non-"me" commit in the same year should not be included in the upload payload.
+    _run(["git", "config", "user.name", "Other User"], cwd=repo)
+    _run(["git", "config", "user.email", "other@example.com"], cwd=repo)
+    _commit_file(repo=repo, filename="b.txt", content="b\n", author_date="2025-01-03T12:00:00Z")
+    _run(["git", "config", "user.name", "Test User"], cwd=repo)
+    _run(["git", "config", "user.email", "test@example.com"], cwd=repo)
 
     config_path = tmp_path / "config.json"
-    config_path.write_text(json.dumps({"upload_config": {"api_url": f"http://127.0.0.1:{server.server_port}"}}), encoding="utf-8")
+    config_path.write_text(
+        json.dumps(
+            {
+                "me_emails": ["test@example.com"],
+                "upload_config": {"api_url": f"http://127.0.0.1:{server.server_port}"},
+            }
+        ),
+        encoding="utf-8",
+    )
 
     token_path = tmp_path / "publisher_token"
 
@@ -94,8 +108,8 @@ def test_publish_wizard_persists_config_and_uploads(tmp_path: Path) -> None:
     answers = "\n".join(
         [
             "y",
+            "2025",
             "Alice",
-            "none",
             str(token_path),
             "2023-06",
             "2024-02-15",
@@ -112,7 +126,6 @@ def test_publish_wizard_persists_config_and_uploads(tmp_path: Path) -> None:
     cfg = json.loads(config_path.read_text(encoding="utf-8"))
     up = cfg.get("upload_config") or {}
     assert up.get("publisher") == "Alice"
-    assert up.get("repo_url_privacy") == "none"
     assert up.get("publisher_token_path") == str(token_path)
     llm = up.get("llm_coding") or {}
     assert (llm.get("started_at") or {}).get("value") == "2023-06"
@@ -125,12 +138,27 @@ def test_publish_wizard_persists_config_and_uploads(tmp_path: Path) -> None:
     payload = received.get("payload") or {}
     assert payload.get("schema_version") == "upload_package_v1"
     assert (payload.get("publisher") or {}).get("value") == "Alice"
-    assert (payload.get("privacy") or {}).get("mode") == "none"
     llm2 = payload.get("llm_coding") or {}
     assert (llm2.get("started_at") or {}).get("value") == "2023-06"
     assert (llm2.get("dominant_at") or {}).get("value") == "2024-02-15"
     assert llm2.get("primary_tool_initial") == "github_copilot"
     assert llm2.get("primary_tool_current") == "cursor"
+
+    assert "repos" not in payload
+    assert "privacy" not in payload
+
+    year_totals = payload.get("year_totals") or []
+    assert any(int(row.get("year")) == 2025 for row in year_totals if isinstance(row, dict))
+    totals_2025 = next((row for row in year_totals if isinstance(row, dict) and int(row.get("year", 0)) == 2025), {})
+    assert int((totals_2025.get("totals") or {}).get("commits", 0)) == 1
+
+    weekly = payload.get("weekly") or {}
+    assert (weekly.get("definition") or {}).get("technology_kind") == "language_for_path"
+    rows = (weekly.get("series_by_period") or {}).get("2025") or []
+    assert rows and isinstance(rows, list)
+    techs = rows[0].get("technologies") or []
+    assert techs and isinstance(techs, list)
+    assert {t.get("technology") for t in techs} == {"Other"}
 
 
 def test_publish_wizard_skips_setup_when_config_present(tmp_path: Path) -> None:
@@ -151,8 +179,8 @@ def test_publish_wizard_skips_setup_when_config_present(tmp_path: Path) -> None:
             "default_publish": False,
             "api_url": "http://example.invalid",
             "publisher": "Alice",
-            "repo_url_privacy": "none",
             "publisher_token_path": str(token_path),
+            "upload_years": [2025],
             "llm_coding": {
                 "started_at": {"value": "2023-06", "precision": "month"},
                 "dominant_at": {"value": "2024-02-15", "precision": "day"},
@@ -181,12 +209,11 @@ def test_publish_wizard_skips_setup_when_config_present(tmp_path: Path) -> None:
     ]
 
     # With a complete upload_config present, only confirm publish + upload (no re-running the setup wizard).
-    proc = subprocess.run(cmd, cwd=str(tmp_path), env=env, input="y\nn\n", text=True, capture_output=True)
+    proc = subprocess.run(cmd, cwd=str(tmp_path), env=env, input="y\n2025\nn\n", text=True, capture_output=True)
     assert proc.returncode == 0, proc.stderr
 
     out = proc.stdout
     assert "Public identity" not in out
-    assert "Repo URL privacy mode" not in out
     assert "Primary LLM coding tool when you started" not in out
     assert "Edit config.json" in out
     assert "Continuing analysis" in out
@@ -229,4 +256,87 @@ def test_publish_prompt_explains_what_you_get(tmp_path: Path) -> None:
     assert "What you get by publishing" in out
     assert "LLM tools" in out
     assert "leaderboards" in out or "top lists" in out
-    assert "graphs" in out
+
+
+def test_publish_upload_years_always_include_2025(tmp_path: Path) -> None:
+    received: dict[str, object] = {}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            if self.path != "/api/v1/uploads":
+                self.send_response(404)
+                self.end_headers()
+                return
+            body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            raw = gzip.decompress(body)
+            received["payload"] = json.loads(raw.decode("utf-8"))
+            self.send_response(201)
+            self.end_headers()
+
+        def log_message(self, fmt: str, *args: object) -> None:
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+
+    scan_root = tmp_path / "scan"
+    repo = scan_root / "r"
+    repo.mkdir(parents=True)
+    _run(["git", "init"], cwd=repo)
+    _run(["git", "config", "user.name", "Test User"], cwd=repo)
+    _run(["git", "config", "user.email", "test@example.com"], cwd=repo)
+    _run(["git", "remote", "add", "origin", "git@github.com:org/repo.git"], cwd=repo)
+    _commit_file(repo=repo, filename="a.txt", content="a\n", author_date="2024-01-02T12:00:00Z")
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "me_emails": ["test@example.com"],
+                "upload_config": {"api_url": f"http://127.0.0.1:{server.server_port}"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    token_path = tmp_path / "publisher_token"
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str((Path(__file__).resolve().parents[1] / "src"))
+
+    cmd = [
+        str(Path(__file__).resolve().parents[1] / ".venv" / "bin" / "python"),
+        "-m",
+        "git_analysis.cli",
+        "--root",
+        str(scan_root),
+        "--years",
+        "2024",
+        "--config",
+        str(config_path),
+        "--jobs",
+        "1",
+    ]
+
+    answers = "\n".join(
+        [
+            "y",
+            "2024",
+            "Alice",
+            str(token_path),
+            "2023-06",
+            "2024-02-15",
+            "github_copilot",
+            "cursor",
+            "y",
+        ]
+    )
+    proc = subprocess.run(cmd, cwd=str(tmp_path), env=env, input=answers, text=True, capture_output=True)
+    server.shutdown()
+    assert proc.returncode == 0, proc.stderr
+
+    payload = received.get("payload") or {}
+    periods = payload.get("periods") or []
+    labels = {p.get("label") for p in periods if isinstance(p, dict)}
+    assert "2024" in labels
+    assert "2025" in labels

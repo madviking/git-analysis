@@ -6,11 +6,10 @@ This is the execution plan for adding “upload package” + backend-support fea
 - Datastore is **MySQL** (toolkit remains datastore-agnostic).
 - Metrics resolution is **weekly** (required).
 - No OAuth; identity is **user-provided**.
-- “Verified” badge only possible when user opts into exposing **public repo URLs** (host-specific; GitHub first).
 - Uploads are **replace** semantics (newest upload becomes active snapshot).
 
 ## Goals / Non-goals
-- Goals: deterministic/auditable JSON output; weekly time series; user-controlled privacy; minimal ops complexity.
+- Goals: deterministic/auditable JSON output; weekly time series; user-controlled upload-year selection; minimal ops complexity.
 - Non-goals: prevent fabrication; OAuth/auto-verification; GitHub-only analysis (verification can be host-specific).
 - Only author's own stats get sent to backend, no statistics for other authors
 
@@ -85,9 +84,9 @@ Work items:
 
 ---
 
-## Milestone 3 — Repo support (host-agnostic + privacy-aware identifiers)
+## Milestone 3 — Repo support (host-agnostic identifiers; not uploaded)
 Work items:
-- [x] Ensure per-repo collection includes (at least): `repo_key`, `remote_canonical` (optional), and optionally local `path`.
+- [x] Ensure per-repo collection includes stable identifiers for local analysis (not included in uploads).
 - [x] Define stable `repo_key` (recommended: `sha256(remote_canonical)` else `sha256(abs_path)`).
 - [x] Ensure repo inclusion works across hosts (GitHub/GitLab/Bitbucket/self-hosted/local-only).
 
@@ -113,30 +112,29 @@ Work items:
 ## Milestone 5 — Publish wizard (required UX)
 At run start, prompt:
 1) “Publish results to the public site?” (yes/no)
-2) Display identity (public): pseudonym (default) or GitHub username (optional; not verified)
-3) Repo URL privacy mode: `none` | `public_only` | `all`
+2) Which full years to include in upload (calendar years; 2025 is always included)
+3) Display identity (public): pseudonym (default) or user-provided string (not verified)
 
 Work items:
 - [x] Add interactive prompts (and non-interactive overrides for automation).
-- [x] Add privacy rules enforcement for which repo URLs appear in the upload package.
-- [x] Define “verification_opt_in” behavior and constraints.
+- [x] Ensure uploads include only the user's own ("me") data.
 
 **Notes**
 - Publishing prompt is always shown; saved values are reused as defaults.
-- CLI flags (defaults/overrides): `--publish {no,yes,ask}`, `--publisher`, `--repo-url-privacy`, `--publisher-token-path`, `--upload-url` (overrides `upload_config.api_url`).
+- CLI flags (defaults/overrides): `--publish {no,yes,ask}`, `--publisher`, `--publisher-token-path`, `--upload-url` (overrides `upload_config.api_url`).
 - Wizard answers are persisted in `config.json` under `upload_config.*`.
-- `verification_opt_in` is set automatically when `repo-url-privacy` is `public_only` or `all`.
+- Upload years are persisted in `upload_config.upload_years` (2025 is always included).
 
 ---
 
 ## Milestone 6 — Upload package format (v1)
 Work items:
 - [x] Define the exact JSON schema for `upload_package_v1` (lock fields + types).
-- [x] Include: `schema_version`, `generated_at`, toolkit version, `publisher`, `privacy`, `repos`, `weekly`.
+- [x] Include: `schema_version`, `generated_at`, toolkit version, `publisher`, `data_scope`, `year_totals`, `weekly`.
 - [x] Ensure deterministic JSON bytes for hashing (stable ordering, encoding).
 
 **Schema (current)**
-- Top-level: `schema_version`, `generated_at`, `toolkit_version`, `publisher`, `privacy`, `periods`, `repos`, `weekly`
+- Top-level: `schema_version`, `generated_at`, `toolkit_version`, `publisher`, `data_scope`, `periods`, `year_totals`, `weekly`
 - Deterministic bytes: canonical JSON (`sort_keys=true`, `separators=(",", ":")`, UTF-8)
 
 ---
@@ -156,7 +154,6 @@ Work items:
 Work items:
 - [x] Pretty-print the payload preview with token redaction (`publisher_token_hint` only).
 - [x] Compute and display payload SHA-256 (uncompressed JSON bytes).
-- [x] Show repo URL mode and which repos would be exposed publicly.
 - [x] Require explicit confirmation before upload.
 
 ---

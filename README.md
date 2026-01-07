@@ -18,6 +18,8 @@ When exactly two years are requested, it also produces a side-by-side comparison
 
 All output files go to `git-analysis/reports/`.
 
+Note: text and Markdown reports abbreviate large numbers (e.g. `1K`, `2.5M`, `1B`) including large percentage deltas.
+
 ## Requirements
 
 - Python 3.11+
@@ -45,6 +47,8 @@ Once `upload_config` is set up, the wizard no longer asks you to click through a
 Publishing is what enables public stats pages (LLM tools proficiency summary, leaderboards/top lists, and commit/churn graphs).
 
 Server destination is configured in `config.json` under `upload_config.api_url` (or override with `--upload-url`).
+
+Uploads contain only your own (“me”) stats (not aggregate totals across all authors), contain no repo identifiers/URLs, and are always sent as full calendar years; you’ll be prompted for which years to include (2025 is always included).
 
 ## Development
 

@@ -65,9 +65,9 @@ def run_analysis(*, args: argparse.Namespace, periods: list[Period]) -> int:
 
     if upload_block_reasons:
         print("Note: publishing disabled for this run (unsupported flags: " + ", ".join(upload_block_reasons) + ").")
-        publish_inputs = PublishInputs(publish=False, publisher="", repo_url_privacy="none", publisher_token_path=default_publisher_token_path())
+        publish_inputs = PublishInputs(publish=False, publisher="", publisher_token_path=default_publisher_token_path(), upload_years=[])
     else:
-        publish_inputs = collect_publish_inputs(args=args, config_path=args.config, config=config)
+        publish_inputs = collect_publish_inputs(args=args, config_path=args.config, config=config, report_periods=periods)
     me_emails_cfg = list(config.get("me_emails", []) or [])
     me_names_cfg = list(config.get("me_names", []) or [])
     me_email_globs_cfg = list(config.get("me_email_globs", []) or [])
@@ -164,6 +164,21 @@ def run_analysis(*, args: argparse.Namespace, periods: list[Period]) -> int:
     if not me.emails and not me.names and not me.email_globs and not me.name_globs and not me.github_usernames:
         print("Warning: could not infer 'me' identity; set config.json to get per-user stats.")
 
+    report_periods = list(periods)
+    upload_periods: list[Period] = []
+    if publish_inputs.publish:
+        # Uploads are always whole years; analysis may include other report periods.
+        year_labels = sorted(set(int(y) for y in (publish_inputs.upload_years or []) if int(y) > 0))
+        upload_periods = [Period(label=str(y), start=dt.date(y, 1, 1), end=dt.date(y + 1, 1, 1)) for y in year_labels]
+
+    analysis_periods: list[Period] = list(report_periods)
+    if upload_periods:
+        existing_labels = {p.label for p in analysis_periods}
+        for p in upload_periods:
+            if p.label not in existing_labels:
+                analysis_periods.append(p)
+                existing_labels.add(p.label)
+
     results: list[RepoResult] = []
     with ThreadPoolExecutor(max_workers=args.jobs) as ex:
         futs = []
@@ -177,7 +192,7 @@ def run_analysis(*, args: argparse.Namespace, periods: list[Period]) -> int:
                     remote,
                     remote_canonical,
                     dups,
-                    periods,
+                    analysis_periods,
                     args.include_merges,
                     me,
                     bootstrap_cfg,
@@ -199,7 +214,7 @@ def run_analysis(*, args: argparse.Namespace, periods: list[Period]) -> int:
         report_dir=report_dir,
         scan_root=scan_root,
         run_type=run_type,
-        periods=periods,
+        periods=report_periods,
         results=results,
         selection_rows=selection_rows,
         repo_count_candidates=len(candidates),
@@ -266,7 +281,7 @@ def run_analysis(*, args: argparse.Namespace, periods: list[Period]) -> int:
                 include_bootstraps=include_bootstraps,
             )
 
-    publish_with_wizard(report_dir=report_dir, periods=periods, results=results, inputs=publish_inputs, config_path=args.config, args=args)
+    publish_with_wizard(report_dir=report_dir, upload_periods=upload_periods or report_periods, results=results, inputs=publish_inputs, config_path=args.config, args=args)
 
     print(f"Done. Reports in: {report_dir}")
     return 0
