@@ -281,7 +281,29 @@ def run_analysis(*, args: argparse.Namespace, periods: list[Period]) -> int:
                 include_bootstraps=include_bootstraps,
             )
 
-    publish_with_wizard(report_dir=report_dir, upload_periods=upload_periods or report_periods, results=results, inputs=publish_inputs, config_path=args.config, args=args)
+    try:
+        publish_with_wizard(
+            report_dir=report_dir,
+            upload_periods=upload_periods or report_periods,
+            results=results,
+            inputs=publish_inputs,
+            config_path=args.config,
+            args=args,
+        )
+    except RuntimeError as e:
+        msg = str(e).strip()
+        print("")
+        print("Upload failed.")
+        if msg:
+            print(msg)
+        if "privacy.mode" in msg:
+            print("Hint: your server appears to expect an older upload schema; update the backend to accept the current payload format.")
+        payload_path = report_dir / "json" / "upload_package_v1.json"
+        if payload_path.exists():
+            print(f"Payload saved at: {payload_path}")
+            print(f"Retry after fixing the server: ./cli.sh upload --report-dir {report_dir} --yes")
+        print(f"Done. Reports in: {report_dir}")
+        return 2
 
     print(f"Done. Reports in: {report_dir}")
     return 0

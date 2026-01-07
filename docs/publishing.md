@@ -12,7 +12,7 @@ The first time you publish (or if `upload_config` is missing), the wizard collec
 Once `upload_config` is set up, the wizard does not re-prompt for these values; update them by editing `config.json` under `upload_config.*`.
 
 If publishing is enabled, the tool will later:
-1) Print a payload preview (token redacted)
+1) Print an upload preview summary (and save the payload to disk)
 2) Print the payload SHA-256 (canonical JSON bytes)
 3) Prompt for final confirmation before upload
  
@@ -46,3 +46,5 @@ If a report folder already contains `json/upload_package_v1.json`, you can uploa
 ```bash
 ./cli.sh upload --report-dir reports/<run-type>/<timestamp> --yes
 ```
+
+`--yes` skips the confirmation prompt.

@@ -2,6 +2,8 @@
 
 This document summarizes additions/changes in the `git-analysis` toolkit that require backend support beyond what’s described in `docs/backend-support.md`.
 
+Canonical payload spec: `docs/upload-payload.md`.
+
 ## 1) Upload payload: new `llm_coding` field
 
 `upload_package_v1.json` now includes an optional top-level `llm_coding` object (user-provided metadata collected via the publish wizard).

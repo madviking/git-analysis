@@ -10,3 +10,4 @@ reports/**
 config.json
 .idea
 !reports/example
+reddit.txt

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from . import __version__
 from .analysis_aggregate import aggregate_weekly_me, aggregate_weekly_me_tech
+from .analysis_render import fmt_int
 from .analysis_periods import Period
 from .config import load_config, save_config
 from .models import RepoResult
@@ -191,6 +192,24 @@ def _prompt_llm_coding(upload_cfg: dict[str, object]) -> dict[str, object]:
     }
 
 
+def _week_start_iso_from_commit_iso(commit_iso: str) -> str:
+    s = (commit_iso or "").strip()
+    if not s:
+        return ""
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        d = dt.datetime.fromisoformat(s)
+    except ValueError:
+        return ""
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=dt.timezone.utc)
+    d_utc = d.astimezone(dt.timezone.utc)
+    date_utc = d_utc.date()
+    week_start = date_utc - dt.timedelta(days=date_utc.weekday())
+    return f"{week_start.isoformat()}T00:00:00Z"
+
+
 def _upload_url_from_api_url(api_url: str) -> str:
     u = (api_url or "").strip().rstrip("/")
     if not u:
@@ -298,8 +317,8 @@ def collect_publish_inputs(*, args: object, config_path: Path, config: dict, rep
 
     print("What you get by publishing:")
     print("- Public profile: LLM tools proficiency summary (from your provided LLM coding info)")
-    print("- Placement on top lists / leaderboards (when opted in)")
-    print("- Visualizations: graphs for commits and code-churn history over time")
+    print("- Placement on top lists / leaderboards")
+    print("- Visualizations: graphs for activity and LLM inflection score")
     print("")
 
     publish = _prompt_bool("Publish results to the public site?", default=default_publish)
@@ -370,9 +389,28 @@ def build_upload_payload_from_results(
         weekly_excl = aggregate_weekly_me(results, label, include_bootstraps=False)
         weekly_tech_excl = aggregate_weekly_me_tech(results, label, include_bootstraps=False)
 
+        active_repos_by_week: dict[str, int] = {}
+        new_repos_by_week: dict[str, int] = {}
+        for r in results:
+            wmap = r.me_weekly_by_period_excl_bootstraps.get(label, {})
+            for wk, st in wmap.items():
+                if int(st.get("commits", 0)) <= 0:
+                    continue
+                active_repos_by_week[wk] = int(active_repos_by_week.get(wk, 0)) + 1
+
+            if r.first_commit_iso:
+                try:
+                    first_date = dt.date.fromisoformat(r.first_commit_iso[:10])
+                except ValueError:
+                    first_date = None
+                if first_date is not None and (p.start <= first_date < p.end):
+                    wk0 = _week_start_iso_from_commit_iso(r.first_commit_iso)
+                    if wk0:
+                        new_repos_by_week[wk0] = int(new_repos_by_week.get(wk0, 0)) + 1
+
         def rows(w: dict[str, dict[str, int]], tech: dict[str, dict[str, dict[str, int]]]) -> list[dict[str, object]]:
             out: list[dict[str, int | str]] = []
-            keys = sorted(set(w.keys()) | set(tech.keys()))
+            keys = sorted(set(w.keys()) | set(tech.keys()) | set(active_repos_by_week.keys()) | set(new_repos_by_week.keys()))
             for week_start in keys:
                 st = w.get(week_start, {})
                 techs = tech.get(week_start, {})
@@ -399,6 +437,8 @@ def build_upload_payload_from_results(
                         "insertions": int(st.get("insertions", 0)),
                         "deletions": int(st.get("deletions", 0)),
                         "changed": int(st.get("changed", 0)),
+                        "repos_active": int(active_repos_by_week.get(week_start, 0)),
+                        "repos_new": int(new_repos_by_week.get(week_start, 0)),
                         "technologies": tech_rows,
                     }
                 )
@@ -410,6 +450,9 @@ def build_upload_payload_from_results(
         commits = 0
         insertions = 0
         deletions = 0
+        repos_total = len(results)
+        repos_active = 0
+        repos_new = 0
         for r in results:
             st = r.period_stats_excl_bootstraps.get(label)
             if st is None:
@@ -417,9 +460,21 @@ def build_upload_payload_from_results(
             commits += int(st.commits_me)
             insertions += int(st.insertions_me)
             deletions += int(st.deletions_me)
+            if int(st.commits_me) > 0:
+                repos_active += 1
+            if r.first_commit_iso:
+                try:
+                    first_date = dt.date.fromisoformat(r.first_commit_iso[:10])
+                except ValueError:
+                    first_date = None
+                if first_date is not None and (p.start <= first_date < p.end):
+                    repos_new += 1
         year_totals.append(
             {
                 "year": year,
+                "repos_total": repos_total,
+                "repos_active": repos_active,
+                "repos_new": repos_new,
                 "totals": {
                     "commits": commits,
                     "insertions": insertions,
@@ -434,6 +489,7 @@ def build_upload_payload_from_results(
         "generated_at": generated_at,
         "toolkit_version": __version__,
         "data_scope": "me",
+        "repos_total": len(results),
         "publisher": {"kind": publisher_kind, "value": publisher_value},
         "periods": [{"label": p.label, "start": p.start_iso, "end": p.end_iso} for p in periods],
         "year_totals": year_totals,
@@ -485,21 +541,16 @@ def publish_with_wizard(
     payload_bytes = canonical_json_bytes(payload)
     sha = hashlib.sha256(payload_bytes).hexdigest()
 
-    preview = dict(payload)
-    preview["publisher_token_hint"] = hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
-    print(json_preview(preview))
-    print(f"\nPayload SHA-256: {sha}")
-
     out_path = report_dir / "json" / "upload_package_v1.json"
     out_path.write_bytes(payload_bytes)
-    print(f"Full payload written to: {out_path}")
+    _print_upload_summary(payload=payload, payload_path=out_path, payload_sha256=sha)
 
     mode = str(upload_cfg.get("automatic_upload", "confirm") or "confirm").strip().lower()
     if mode in ("no", "never", "false", "0"):
         return
-    if mode not in ("yes", "always", "true", "1"):
-        if not _prompt_bool("Upload now?", default=False):
-            return
+    default_upload = mode in ("yes", "always", "true", "1")
+    if not _prompt_bool(f"Upload {out_path.name} now?", default=default_upload):
+        return
 
     override = str(getattr(args, "upload_url", "") or "").strip() if args is not None else ""
     if override:
@@ -522,6 +573,7 @@ def publish_with_wizard(
     if not upload_url:
         raise RuntimeError("upload_url is required for publishing")
 
+    print("Uploading...")
     upload_package_v1(
         upload_url=upload_url,
         publisher_token=token,
@@ -529,10 +581,74 @@ def publish_with_wizard(
         payload_sha256=sha,
         timeout_s=30,
     )
+    print("Upload complete.")
 
 
 def json_preview(data: object) -> str:
     return json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False)
+
+
+def _upload_summary_lines(*, payload: dict, payload_path: Path, payload_sha256: str) -> list[str]:
+    repos_total = int(payload.get("repos_total", 0) or 0)
+    periods = payload.get("periods") if isinstance(payload.get("periods"), list) else []
+    year_labels = [str(p.get("label")) for p in periods if isinstance(p, dict) and p.get("label")]
+    year_totals = payload.get("year_totals") if isinstance(payload.get("year_totals"), list) else []
+
+    weekly_counts: dict[str, int] = {}
+    weekly_min: dict[str, str] = {}
+    weekly_max: dict[str, str] = {}
+    weekly = payload.get("weekly") if isinstance(payload.get("weekly"), dict) else {}
+    series_by_period = weekly.get("series_by_period") if isinstance(weekly.get("series_by_period"), dict) else {}
+    for label, rows in series_by_period.items():
+        if not isinstance(label, str) or not isinstance(rows, list):
+            continue
+        weekly_counts[label] = len(rows)
+        starts = [r.get("week_start") for r in rows if isinstance(r, dict) and isinstance(r.get("week_start"), str)]
+        if starts:
+            weekly_min[label] = min(starts)
+            weekly_max[label] = max(starts)
+
+    lines: list[str] = []
+    lines.append("Upload package saved at:")
+    lines.append(str(payload_path))
+    lines.append(f"Payload SHA-256: {payload_sha256}")
+    lines.append("")
+    lines.append("This will upload:")
+    lines.append("- Your own activity only (data_scope=me)")
+    lines.append("- No repo identifiers/URLs")
+    lines.append("- Bootstrap commits excluded")
+    if year_labels:
+        lines.append(f"- Years: {', '.join(year_labels)} (uploads are full calendar years)")
+    lines.append(f"- Repos analyzed: {repos_total}")
+
+    if year_totals:
+        lines.append("")
+        lines.append("Per-year summary:")
+        for row in year_totals:
+            if not isinstance(row, dict):
+                continue
+            year = row.get("year")
+            totals = row.get("totals") if isinstance(row.get("totals"), dict) else {}
+            commits = int(totals.get("commits", 0) or 0)
+            changed = int(totals.get("changed", 0) or 0)
+            repos_active = int(row.get("repos_active", 0) or 0)
+            repos_new = int(row.get("repos_new", 0) or 0)
+            label = str(year)
+            wk_n = weekly_counts.get(label, 0)
+            wk_range = ""
+            if label in weekly_min and label in weekly_max:
+                wk_range = f" ({weekly_min[label]}..{weekly_max[label]})"
+            lines.append(f"- {label}: commits {fmt_int(commits)}, changed {fmt_int(changed)}, repos_active {repos_active}, repos_new {repos_new}, weeks {wk_n}{wk_range}")
+
+    return lines
+
+
+def _print_upload_summary(*, payload: dict, payload_path: Path, payload_sha256: str) -> None:
+    print("")
+    print("┌──────────────────────── Upload Preview ────────────────────────┐")
+    for line in _upload_summary_lines(payload=payload, payload_path=payload_path, payload_sha256=payload_sha256):
+        print(line)
+    print("└─────────────────────────────────────────────────────────────────┘")
 
 
 def upload_existing_report_dir(
@@ -607,19 +723,16 @@ def upload_existing_report_dir(
     token_path = Path(token_path_s).expanduser() if token_path_s else default_publisher_token_path()
     token = ensure_publisher_token(token_path)
 
-    preview = dict(payload_obj) if isinstance(payload_obj, dict) else {"payload": payload_obj}
-    preview["publisher_token_hint"] = hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
-    print(json_preview(preview))
-    print(f"\nPayload SHA-256: {sha}")
-    print(f"Full payload read from: {payload_path}")
+    _print_upload_summary(payload=payload_obj, payload_path=payload_path, payload_sha256=sha)
 
     mode = str(upload_cfg.get("automatic_upload", "confirm") or "confirm").strip().lower()
     if assume_yes:
         mode = "always"
     if mode in ("no", "never", "false", "0"):
         return 0
-    if mode not in ("yes", "always", "true", "1"):
-        if not _prompt_bool("Upload now?", default=False):
+    default_upload = mode in ("yes", "always", "true", "1")
+    if not assume_yes:
+        if not _prompt_bool(f"Upload {payload_path.name} now?", default=default_upload):
             return 0
 
     override = str(upload_url_override or "").strip()
@@ -646,11 +759,23 @@ def upload_existing_report_dir(
         print("Error: upload_url is required for uploading")
         return 2
 
-    upload_package_v1(
-        upload_url=upload_url,
-        publisher_token=token,
-        payload_bytes=payload_bytes,
-        payload_sha256=sha,
-        timeout_s=30,
-    )
+    try:
+        print("Uploading...")
+        upload_package_v1(
+            upload_url=upload_url,
+            publisher_token=token,
+            payload_bytes=payload_bytes,
+            payload_sha256=sha,
+            timeout_s=30,
+        )
+        print("Upload complete.")
+    except RuntimeError as e:
+        msg = str(e).strip()
+        print("")
+        print("Upload failed.")
+        if msg:
+            print(msg)
+        if "privacy.mode" in msg:
+            print("Hint: your server appears to expect an older upload schema; update the backend to accept the current payload format.")
+        return 2
     return 0

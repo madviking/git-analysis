@@ -8,6 +8,8 @@ The format is based on Keep a Changelog, and this project follows SemVer where a
 
 ### Fixed
 - Prevent `git log` deadlocks by draining stderr while streaming stdout (fixes analysis runs hanging near completion).
+- Graceful upload failures: HTTP errors no longer show Python tracebacks; payload path and retry hint are printed instead.
+- Upload preview no longer prints the full JSON payload; it prints a summary and a file path, then prompts for confirmation.
 
 ### Added
 - Auto-bootstrap config creation from `config-template.json` when `--config` is missing, with inferred identity and scanned repo remote prefixes, then prompt to review/edit before continuing.
@@ -20,7 +22,7 @@ The format is based on Keep a Changelog, and this project follows SemVer where a
 ### Changed
 - Upload/publish defaults now persist under `config.json` → `upload_config.*` (backward-compatible read of legacy `publish` block remains).
 - Upload destination now comes from `upload_config.api_url` (or `--upload-url`); legacy `server.json`/`server-config.json` are no longer used.
-- Upload payload now contains only “me” stats, excludes bootstrap series, excludes all repo identifiers/URLs, adds `year_totals`, and prompts for which full years to upload (2025 always included).
+- Upload payload now contains only “me” stats, excludes bootstraps, excludes all repo identifiers/URLs, adds repo counts (`repos_total`, `repos_active`, `repos_new`) in `year_totals` and each weekly row, and prompts for which full years to upload (2025 always included).
 - Rendered percentages no longer include decimals (e.g. `+33%` instead of `+33.3%`).
 - Report `.txt`/`.md` outputs abbreviate large numbers (e.g. `1K`, `2.5M`) including large percentage deltas.
 - Expanded default exclusion lists in `config-template.json` for common build/cache directories and generated paths.

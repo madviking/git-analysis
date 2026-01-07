@@ -122,6 +122,9 @@ def test_publish_wizard_persists_config_and_uploads(tmp_path: Path) -> None:
     server.shutdown()
     assert proc.returncode == 0, proc.stderr
     assert (tmp_path / "server.json").exists() is False
+    assert '"schema_version"' not in proc.stdout
+    assert '"weekly"' not in proc.stdout
+    assert "Upload package saved at:" in proc.stdout
 
     cfg = json.loads(config_path.read_text(encoding="utf-8"))
     up = cfg.get("upload_config") or {}
@@ -151,11 +154,16 @@ def test_publish_wizard_persists_config_and_uploads(tmp_path: Path) -> None:
     assert any(int(row.get("year")) == 2025 for row in year_totals if isinstance(row, dict))
     totals_2025 = next((row for row in year_totals if isinstance(row, dict) and int(row.get("year", 0)) == 2025), {})
     assert int((totals_2025.get("totals") or {}).get("commits", 0)) == 1
+    assert int(totals_2025.get("repos_total", 0)) == 1
+    assert int(totals_2025.get("repos_active", 0)) == 1
+    assert int(totals_2025.get("repos_new", 0)) == 1
 
     weekly = payload.get("weekly") or {}
     assert (weekly.get("definition") or {}).get("technology_kind") == "language_for_path"
     rows = (weekly.get("series_by_period") or {}).get("2025") or []
     assert rows and isinstance(rows, list)
+    assert int(rows[0].get("repos_active", 0)) == 1
+    assert int(rows[0].get("repos_new", 0)) == 1
     techs = rows[0].get("technologies") or []
     assert techs and isinstance(techs, list)
     assert {t.get("technology") for t in techs} == {"Other"}
@@ -340,3 +348,77 @@ def test_publish_upload_years_always_include_2025(tmp_path: Path) -> None:
     labels = {p.get("label") for p in periods if isinstance(p, dict)}
     assert "2024" in labels
     assert "2025" in labels
+
+
+def test_publish_upload_http_error_is_graceful(tmp_path: Path) -> None:
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"error":"bad_request","message":"invalid privacy.mode: \\"\\""}')
+
+        def log_message(self, fmt: str, *args: object) -> None:
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+
+    scan_root = tmp_path / "scan"
+    repo = scan_root / "r"
+    repo.mkdir(parents=True)
+    _run(["git", "init"], cwd=repo)
+    _run(["git", "config", "user.name", "Test User"], cwd=repo)
+    _run(["git", "config", "user.email", "test@example.com"], cwd=repo)
+    _run(["git", "remote", "add", "origin", "git@github.com:org/repo.git"], cwd=repo)
+    _commit_file(repo=repo, filename="a.txt", content="a\n", author_date="2025-01-02T12:00:00Z")
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "me_emails": ["test@example.com"],
+                "upload_config": {"api_url": f"http://127.0.0.1:{server.server_port}"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    token_path = tmp_path / "publisher_token"
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str((Path(__file__).resolve().parents[1] / "src"))
+
+    cmd = [
+        str(Path(__file__).resolve().parents[1] / ".venv" / "bin" / "python"),
+        "-m",
+        "git_analysis.cli",
+        "--root",
+        str(scan_root),
+        "--years",
+        "2025",
+        "--config",
+        str(config_path),
+        "--jobs",
+        "1",
+    ]
+
+    answers = "\n".join(
+        [
+            "y",
+            "2025",
+            "Alice",
+            str(token_path),
+            "2023-06",
+            "2024-02-15",
+            "github_copilot",
+            "cursor",
+            "y",
+        ]
+    )
+    proc = subprocess.run(cmd, cwd=str(tmp_path), env=env, input=answers, text=True, capture_output=True)
+    server.shutdown()
+    assert proc.returncode == 2, proc.stderr
+    assert "Traceback" not in proc.stdout
+    assert "Traceback" not in proc.stderr
+    assert "upload failed: HTTP 400" in (proc.stdout + proc.stderr)
