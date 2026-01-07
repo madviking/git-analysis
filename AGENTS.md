@@ -5,6 +5,7 @@
 - Prefer non-mocking tests (real temporary git repos, real HTTP server for uploads) unless truly impractical.
 - Run the full test suite (`.venv/bin/python -m pytest`) before finishing any change.
 - Keep documentation current: update `README.md` and relevant files under `docs/` when behavior or interfaces change.
+- Record updats in CHANGELOG.md
 
 ## Repo conventions
 - Keep changes minimal and focused.

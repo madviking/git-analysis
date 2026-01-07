@@ -41,13 +41,14 @@ def _empty_repo_result(*, repo_key: str = "k") -> RepoResult:
     )
 
 
-def test_reports_are_written_to_subfolders(tmp_path: Path) -> None:
-    period = Period(label="2025", start=dt.date(2025, 1, 1), end=dt.date(2026, 1, 1))
+def test_comparison_txt_and_markup_written(tmp_path: Path) -> None:
+    p0 = Period(label="2025H1", start=dt.date(2025, 1, 1), end=dt.date(2025, 7, 1))
+    p1 = Period(label="2025H2", start=dt.date(2025, 7, 1), end=dt.date(2026, 1, 1))
     write_reports(
         report_dir=tmp_path,
         scan_root=tmp_path,
-        run_type="years_2025",
-        periods=[period],
+        run_type="halves_2025",
+        periods=[p0, p1],
         results=[_empty_repo_result()],
         selection_rows=[{"status": "included", "candidate_path": "/tmp/repo"}],
         repo_count_candidates=1,
@@ -69,7 +70,12 @@ def test_reports_are_written_to_subfolders(tmp_path: Path) -> None:
         ascii_top_n=5,
     )
 
-    assert (tmp_path / "json" / "year_2025_summary.json").exists()
-    assert (tmp_path / "csv" / "year_2025_repos.csv").exists()
-    assert (tmp_path / "debug" / "repo_selection.csv").exists()
-    assert (tmp_path / "markup" / "year_in_review_2025.md").exists()
+    assert (tmp_path / "comparison_2025H1_vs_2025H2.txt").exists()
+    assert (tmp_path / "markup" / "comparison_2025H1_vs_2025H2.md").exists()
+    assert (tmp_path / "comparison_2025H1_vs_2025H2.md").exists() is False
+    comp_md = (tmp_path / "markup" / "comparison_2025H1_vs_2025H2.md").read_text(encoding="utf-8")
+    assert comp_md.startswith("# Git comparison:")
+    assert "Bootstraps (totals)" not in comp_md
+    assert "Totals (including bootstraps)" not in comp_md
+    assert (tmp_path / "period_in_review_2025H1_vs_2025H2.txt").exists()
+    assert (tmp_path / "markup" / "period_in_review_2025H1_vs_2025H2.md").exists()

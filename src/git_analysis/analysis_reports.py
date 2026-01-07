@@ -14,7 +14,7 @@ from .analysis_aggregate import (
     aggregate_weekly,
 )
 from .analysis_periods import Period, month_labels_for_period
-from .analysis_render import render_year_in_review, render_yoy_year_in_review, write_comparison_md
+from .analysis_render import render_comparison_txt_from_md, render_year_in_review, render_yoy_year_in_review, write_comparison_md
 from .analysis_write import (
     ensure_dir,
     write_authors_csv,
@@ -63,10 +63,29 @@ def write_reports(
     json_dir = report_dir / "json"
     timeseries_dir = report_dir / "timeseries"
     debug_dir = report_dir / "debug"
+    markup_dir = report_dir / "markup"
     ensure_dir(csv_dir)
     ensure_dir(json_dir)
     ensure_dir(timeseries_dir)
     ensure_dir(debug_dir)
+    ensure_dir(markup_dir)
+
+    def review_prefix_for_label(label: str) -> str:
+        s = str(label or "").strip()
+        return "year_in_review" if s.isdigit() and len(s) == 4 else "period_in_review"
+
+    def review_prefix_for_compare(a: str, b: str) -> str:
+        return "year_in_review" if review_prefix_for_label(a) == "year_in_review" and review_prefix_for_label(b) == "year_in_review" else "period_in_review"
+
+    def write_txt_and_markup(*, txt_path: Path, text: str, write_markup: bool = True) -> None:
+        txt_path.write_text(text, encoding="utf-8")
+        if write_markup:
+            md_path = (
+                markup_dir / (txt_path.name[:-4] + ".md")
+                if txt_path.name.endswith(".txt")
+                else markup_dir / (txt_path.name + ".md")
+            )
+            md_path.write_text(f"```text\n{text.rstrip()}\n```\n", encoding="utf-8")
 
     write_repo_selection_csv(debug_dir / "repo_selection.csv", selection_rows)
     write_repo_selection_summary(debug_dir / "repo_selection_summary.json", selection_rows)
@@ -185,12 +204,34 @@ def write_reports(
         write_languages_csv(csv_dir / f"year_{label}_languages.csv", languages_agg)
         write_dirs_csv(csv_dir / f"year_{label}_dirs.csv", dirs_agg)
         write_bootstrap_commits_csv(csv_dir / f"year_{label}_bootstraps_commits.csv", results, label)
+        bootstrap_rows: list[dict[str, object]] = []
+        for r in results:
+            for c in r.bootstrap_commits_by_period.get(label, []):
+                row = dict(c)
+                row["repo_path"] = r.path
+                row["repo_key"] = r.key
+                row["remote_canonical"] = r.remote_canonical
+                bootstrap_rows.append(row)
+        bootstrap_rows.sort(key=lambda d: (-int(d.get("changed", 0)), str(d.get("repo_key", "")), str(d.get("sha", ""))))
+        write_json(
+            debug_dir / f"bootstraps_commits_{label}.json",
+            {
+                "period": label,
+                "bootstrap_config": {
+                    "changed_threshold": bootstrap_cfg.changed_threshold,
+                    "files_threshold": bootstrap_cfg.files_threshold,
+                    "addition_ratio": bootstrap_cfg.addition_ratio,
+                },
+                "commits": bootstrap_rows,
+            },
+        )
         write_authors_csv(csv_dir / f"year_{label}_bootstraps_authors.csv", authors_boot, me)
         write_languages_csv(csv_dir / f"year_{label}_bootstraps_languages.csv", languages_boot)
         write_dirs_csv(csv_dir / f"year_{label}_bootstraps_dirs.csv", dirs_boot)
 
-        (report_dir / f"year_in_review_{label}.txt").write_text(
-            render_year_in_review(
+        write_txt_and_markup(
+            txt_path=report_dir / f"{review_prefix_for_label(label)}_{label}.txt",
+            text=render_year_in_review(
                 period=period,
                 year_agg=agg,
                 year_agg_bootstraps=agg_boot,
@@ -209,7 +250,6 @@ def write_reports(
                 top_n=ascii_top_n,
                 me=me,
             ),
-            encoding="utf-8",
         )
 
         if detailed:
@@ -331,49 +371,39 @@ def write_reports(
     if len(periods) == 2:
         p0 = periods[0]
         p1 = periods[1]
-        y0_excl = period_aggs_excl[p0.label]
-        y1_excl = period_aggs_excl[p1.label]
-        l0_excl = period_langs_excl[p0.label]
-        l1_excl = period_langs_excl[p1.label]
-        d0_excl = period_dirs_excl[p0.label]
-        d1_excl = period_dirs_excl[p1.label]
-        y0_boot = period_aggs_boot[p0.label]
-        y1_boot = period_aggs_boot[p1.label]
-        l0_boot = period_langs_boot[p0.label]
-        l1_boot = period_langs_boot[p1.label]
-        d0_boot = period_dirs_boot[p0.label]
-        d1_boot = period_dirs_boot[p1.label]
-        y0_incl = period_aggs_incl[p0.label]
-        y1_incl = period_aggs_incl[p1.label]
+        y0 = period_aggs_incl[p0.label] if include_bootstraps else period_aggs_excl[p0.label]
+        y1 = period_aggs_incl[p1.label] if include_bootstraps else period_aggs_excl[p1.label]
+        l0 = period_langs_incl[p0.label] if include_bootstraps else period_langs_excl[p0.label]
+        l1 = period_langs_incl[p1.label] if include_bootstraps else period_langs_excl[p1.label]
+        d0 = period_dirs_incl[p0.label] if include_bootstraps else period_dirs_excl[p0.label]
+        d1 = period_dirs_incl[p1.label] if include_bootstraps else period_dirs_excl[p1.label]
 
         write_comparison_md(
-            report_dir / f"comparison_{p0.label}_vs_{p1.label}.md",
-            y0_excl,
-            y1_excl,
-            l0_excl,
-            l1_excl,
-            d0_excl,
-            d1_excl,
-            y0_boot,
-            y1_boot,
-            l0_boot,
-            l1_boot,
-            d0_boot,
-            d1_boot,
-            y0_incl,
-            y1_incl,
+            markup_dir / f"comparison_{p0.label}_vs_{p1.label}.md",
+            y0,
+            y1,
+            l0,
+            l1,
+            d0,
+            d1,
+            include_bootstraps=include_bootstraps,
         )
-        (report_dir / f"year_in_review_{p0.label}_vs_{p1.label}.txt").write_text(
-            render_yoy_year_in_review(
+        comp_md_path = markup_dir / f"comparison_{p0.label}_vs_{p1.label}.md"
+        comp_txt_path = report_dir / f"comparison_{p0.label}_vs_{p1.label}.txt"
+        comp_md = comp_md_path.read_text(encoding="utf-8")
+        write_txt_and_markup(txt_path=comp_txt_path, text=render_comparison_txt_from_md(comp_md), write_markup=False)
+
+        write_txt_and_markup(
+            txt_path=report_dir / f"{review_prefix_for_compare(p0.label, p1.label)}_{p0.label}_vs_{p1.label}.txt",
+            text=render_yoy_year_in_review(
                 period0=p0,
                 period1=p1,
-                agg0=y0_excl,
-                agg1=y1_excl,
-                langs0=l0_excl,
-                langs1=l1_excl,
+                agg0=y0,
+                agg1=y1,
+                langs0=l0,
+                langs1=l1,
                 top_n=ascii_top_n,
             ),
-            encoding="utf-8",
         )
 
     meta = {
@@ -411,3 +441,38 @@ def write_reports(
         "errors_count": sum(len(r.errors) for r in results),
     }
     write_json(json_dir / "run_meta.json", meta)
+
+
+def write_llm_inflection_stats(
+    *,
+    report_dir: Path,
+    period_before: Period,
+    period_after: Period,
+    results: list[RepoResult],
+    me: MeMatcher,
+    include_bootstraps: bool,
+) -> None:
+    markup_dir = report_dir / "markup"
+    ensure_dir(markup_dir)
+
+    y0 = aggregate_period(results, period_before, me, include_bootstraps=include_bootstraps)
+    y1 = aggregate_period(results, period_after, me, include_bootstraps=include_bootstraps)
+    l0 = aggregate_languages(results, period_before.label, include_bootstraps=include_bootstraps)
+    l1 = aggregate_languages(results, period_after.label, include_bootstraps=include_bootstraps)
+    d0 = aggregate_dirs(results, period_before.label, include_bootstraps=include_bootstraps)
+    d1 = aggregate_dirs(results, period_after.label, include_bootstraps=include_bootstraps)
+
+    md_path = markup_dir / "llm_inflection_stats.md"
+    write_comparison_md(
+        md_path,
+        y0,
+        y1,
+        l0,
+        l1,
+        d0,
+        d1,
+        include_bootstraps=include_bootstraps,
+    )
+
+    txt_path = report_dir / "llm_inflection_stats.txt"
+    txt_path.write_text(render_comparison_txt_from_md(md_path.read_text(encoding="utf-8")), encoding="utf-8")

@@ -42,9 +42,15 @@ Work items:
 
 **Mapping (current)**
 - Root (markup):
-  - `year_in_review_<period>.txt`
-  - `year_in_review_<p0>_vs_<p1>.txt` (when comparing)
+  - `year_in_review_<YYYY>.txt` / `period_in_review_<period>.txt`
+  - `year_in_review_<YYYY0>_vs_<YYYY1>.txt` / `period_in_review_<p0>_vs_<p1>.txt` (when comparing)
+  - `comparison_<p0>_vs_<p1>.txt` (when comparing)
+  - `llm_inflection_stats.txt` (when `upload_config.llm_coding.dominant_at` is set)
+- `markup/`:
+  - `year_in_review_*.md`
+  - `period_in_review_*.md`
   - `comparison_<p0>_vs_<p1>.md` (when comparing)
+  - `llm_inflection_stats.md` (when `upload_config.llm_coding.dominant_at` is set)
 - `json/`:
   - `year_<period>_summary.json`
   - `year_<period>_excluded.json`
@@ -117,8 +123,8 @@ Work items:
 
 **Notes**
 - Publishing prompt is always shown; saved values are reused as defaults.
-- CLI flags (defaults/overrides): `--publish {no,yes,ask}`, `--publisher`, `--repo-url-privacy`, `--publisher-token-path`, `--upload-url` (overrides `server.json`).
-- Wizard answers are persisted in `config.json` under `publish.*`.
+- CLI flags (defaults/overrides): `--publish {no,yes,ask}`, `--publisher`, `--repo-url-privacy`, `--publisher-token-path`, `--upload-url` (overrides `upload_config.api_url`).
+- Wizard answers are persisted in `config.json` under `upload_config.*`.
 - `verification_opt_in` is set automatically when `repo-url-privacy` is `public_only` or `all`.
 
 ---
@@ -162,7 +168,7 @@ Work items:
 - [x] Handle responses: `201`, `400`, optional `409`.
 
 **Server destination**
-- Base URL is stored in `server.json` as `api_url` and the client uploads to `${api_url}/api/v1/uploads`.
+- Base URL is stored in `config.json` as `upload_config.api_url` and the client uploads to `${api_url}/api/v1/uploads`.
 
 ---
 

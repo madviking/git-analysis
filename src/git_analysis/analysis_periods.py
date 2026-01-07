@@ -79,3 +79,36 @@ def month_labels_for_period(period: Period) -> list[str]:
         else:
             cur = dt.date(cur.year, cur.month + 1, 1)
     return out
+
+
+def parse_date_precision_to_date(value: dict[str, str] | None) -> dt.date | None:
+    if not isinstance(value, dict):
+        return None
+    v = str(value.get("value", "") or "").strip()
+    p = str(value.get("precision", "") or "").strip().lower()
+    if not v or p not in ("year", "month", "day"):
+        return None
+    try:
+        if p == "day":
+            return dt.date.fromisoformat(v)
+        if p == "month":
+            y, m = v.split("-", 1)
+            return dt.date(int(y), int(m), 1)
+        if p == "year":
+            return dt.date(int(v), 1, 1)
+    except Exception:
+        return None
+    return None
+
+
+def llm_inflection_periods(*, dominant_at: dt.date, today: dt.date | None = None) -> tuple[Period, Period]:
+    if today is None:
+        today = dt.date.today()
+    end_after = today + dt.timedelta(days=1)
+    delta = end_after - dominant_at
+    if delta.days <= 0:
+        raise ValueError("dominant_at must be before today")
+    start_before = dominant_at - delta
+    before = Period(label="pre_dominant", start=start_before, end=dominant_at)
+    after = Period(label="post_dominant", start=dominant_at, end=end_after)
+    return before, after

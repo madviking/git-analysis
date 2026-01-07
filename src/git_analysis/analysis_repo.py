@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import subprocess
+import threading
 from collections import defaultdict
 from pathlib import Path
 
@@ -38,6 +39,7 @@ def parse_numstat_stream(
     bootstrap: BootstrapConfig,
     exclude_path_prefixes: list[str],
     exclude_path_globs: list[str],
+    bootstrap_exclude_shas: set[str] | None = None,
 ) -> tuple[
     RepoYearStats,  # excl bootstraps
     RepoYearStats,  # bootstraps only
@@ -129,7 +131,8 @@ def parse_numstat_stream(
         if not current_sha:
             return
 
-        is_boot = bootstrap.is_bootstrap(current_insertions, current_deletions, current_files_touched)
+        excluded = bootstrap_exclude_shas or set()
+        is_boot = bootstrap.is_bootstrap(current_insertions, current_deletions, current_files_touched) and current_sha not in excluded
         stats_target = stats_boot if is_boot else stats_excl
         weekly_target = weekly_boot if is_boot else weekly_excl
         authors_target = authors_boot if is_boot else authors_excl
@@ -244,6 +247,29 @@ def parse_numstat_stream(
             [f"failed to start git log: {e}"],
         )
 
+    stderr_chunks: list[str] = []
+    stderr_chars = 0
+    max_stderr_chars = 50_000
+
+    def drain_stderr() -> None:
+        nonlocal stderr_chars
+        if proc.stderr is None:
+            return
+        while True:
+            chunk = proc.stderr.read(8192)
+            if not chunk:
+                return
+            if stderr_chars >= max_stderr_chars:
+                continue
+            take = chunk[: max_stderr_chars - stderr_chars]
+            stderr_chunks.append(take)
+            stderr_chars += len(take)
+
+    stderr_thread: threading.Thread | None = None
+    if proc.stderr is not None:
+        stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
+        stderr_thread.start()
+
     assert proc.stdout is not None
     for raw_line in proc.stdout:
         line = raw_line.rstrip("\n")
@@ -295,11 +321,10 @@ def parse_numstat_stream(
         current_deletions += deleted
         current_files_touched += 1
 
-    stderr = ""
-    if proc.stderr is not None:
-        stderr = proc.stderr.read()
-
     code = proc.wait()
+    if stderr_thread is not None:
+        stderr_thread.join()
+    stderr = "".join(stderr_chunks)
     if code != 0:
         errors.append(f"git log exited {code}: {stderr.strip()[:500]}")
 
@@ -339,6 +364,7 @@ def analyze_repo(
     bootstrap: BootstrapConfig,
     exclude_path_prefixes: list[str],
     exclude_path_globs: list[str],
+    bootstrap_exclude_shas: set[str] | None = None,
 ) -> RepoResult:
     errors: list[str] = []
 
@@ -389,6 +415,7 @@ def analyze_repo(
             bootstrap=bootstrap,
             exclude_path_prefixes=exclude_path_prefixes,
             exclude_path_globs=exclude_path_globs,
+            bootstrap_exclude_shas=bootstrap_exclude_shas,
         )
         period_stats_excl[period.label] = stats_excl_boot
         period_stats_boot[period.label] = stats_boot_only

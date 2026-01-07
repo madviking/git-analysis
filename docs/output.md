@@ -5,9 +5,18 @@ Reports are written under `reports/<run-type>/<timestamp>/`. `reports/latest.txt
 Within a run directory:
 
 ## Root (markup)
-- `year_in_review_<period>.txt`
-- `year_in_review_<p0>_vs_<p1>.txt` (only when comparing exactly 2 periods)
+- `year_in_review_<YYYY>.txt` (when the period label is a year)
+- `period_in_review_<period>.txt` (when the period label is not a year, e.g. `2025H2`)
+- `year_in_review_<YYYY0>_vs_<YYYY1>.txt` (only when comparing exactly 2 year periods)
+- `period_in_review_<p0>_vs_<p1>.txt` (only when comparing exactly 2 non-year periods)
+- `comparison_<p0>_vs_<p1>.txt` (only when comparing exactly 2 periods)
+- `llm_inflection_stats.txt` (only when `upload_config.llm_coding.dominant_at` is set)
+
+## `markup/`
+- `year_in_review_*.md`
+- `period_in_review_*.md`
 - `comparison_<p0>_vs_<p1>.md` (only when comparing exactly 2 periods)
+- `llm_inflection_stats.md` (only when `upload_config.llm_coding.dominant_at` is set)
 
 ## `json/`
 - `year_<period>_summary.json`
@@ -34,4 +43,3 @@ Within a run directory:
 ## `debug/`
 - `repo_selection.csv`
 - `repo_selection_summary.json`
-

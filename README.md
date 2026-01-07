@@ -29,7 +29,6 @@ All output files go to `git-analysis/reports/`.
 ```bash
 cd git-analysis
 brew install uv  # or follow https://docs.astral.sh/uv/
-cp config.example.json config.json
 ./cli.sh --root .. --years 2024 2025
 ```
 Reports are written under `reports/<run-type>/<timestamp>/` and `reports/latest.txt` points to the most recent run directory.
@@ -40,13 +39,12 @@ Start here: `docs/index.md`.
 
 ## Publishing (upload wizard)
 
-Every run prompts whether to publish results and (if publishing) collects/saves defaults to `config.json` under `publish.*`.
+Every run prompts whether to publish results. The first time you publish, the wizard collects/saves upload defaults to `config.json` under `upload_config.*`.
+Once `upload_config` is set up, the wizard no longer asks you to click through all selections; update settings by editing `config.json`.
 
-Server destination is configured in `server.json`:
+Publishing is what enables public stats pages (LLM tools proficiency summary, leaderboards/top lists, and commit/churn graphs).
 
-```json
-{ "api_url": "http://localhost:3220" }
-```
+Server destination is configured in `config.json` under `upload_config.api_url` (or override with `--upload-url`).
 
 ## Development
 
@@ -59,7 +57,7 @@ uv sync --group dev
 
 ## Configuration (`config.json`)
 
-Start from `config.example.json`.
+Start from `config-template.json` or let the tool generate `config.json` if missing.
 
 ### Identify “me”
 
@@ -70,11 +68,13 @@ Start from `config.example.json`.
 - `me_github_usernames`: GitHub username(s) used to match `*@users.noreply.github.com` emails, e.g. `["trailo"]`
 
 If `config.json` is missing, the script tries to infer `user.email` and `user.name` from global git config.
+If `config.json` is missing, it is created from `config-template.json`, pre-filled with inferred identity + scanned repo remotes, then you’re prompted to review/edit before analysis continues.
 
 ### Choose which repos are included
 
 - `include_remote_prefixes`: only include repos whose `remote.origin.url` matches one of these prefixes.
   - Handles both `https://github.com/org/repo` and `git@github.com:org/repo` styles.
+- `excluded_repos`: glob patterns to skip specific repo paths under `--root` (e.g. `["**/archive/**", "**/mirror/**"]`).
 - `remote_name_priority`: when multiple remotes exist (common for forks), prefer these remotes for identifying/deduping the repo (default `["origin","upstream"]`).
 - `remote_filter_mode`:
   - `"any"` (default): include a repo if **any** remote matches `include_remote_prefixes` (helps when `origin` is a fork but `upstream` is the org repo).
@@ -130,7 +130,8 @@ ASCII output:
 Reports are written under `reports/<run-type>/<timestamp>/` and `reports/latest.txt` points to the most recent run directory.
 
 Within a run directory:
-- Root (markup): `year_in_review_<period>.txt`, `year_in_review_<p0>_vs_<p1>.txt`, `comparison_<p0>_vs_<p1>.md`
+- Root: `year_in_review_<YYYY>.txt` / `period_in_review_<period>.txt`, `year_in_review_<YYYY0>_vs_<YYYY1>.txt` / `period_in_review_<p0>_vs_<p1>.txt`, `comparison_<p0>_vs_<p1>.txt`, `llm_inflection_stats.txt` (when configured)
+- `markup/`: `year_in_review_*.md`, `period_in_review_*.md`, `comparison_<p0>_vs_<p1>.md`, `llm_inflection_stats.md` (when configured)
 - `json/`: `year_<period>_summary.json`, `year_<period>_excluded.json`, `run_meta.json`
 - `csv/`: `year_<period>_repos.csv`, `year_<period>_authors.csv`, `year_<period>_languages.csv`, `year_<period>_dirs.csv`, `year_<period>_bootstraps_*.csv`, `repo_activity.csv`
 - `timeseries/`: `year_<period>_weekly.json`, plus (when `--detailed`) `year_<period>_me_timeseries.json` and `me_timeseries.json`

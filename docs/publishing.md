@@ -1,10 +1,15 @@
 # Publishing (upload wizard)
 
-Publishing is interactive and always prompts at run start:
-1) Whether to publish
-2) Public identity (blank = derived pseudonym)
-3) Repo URL privacy mode: `none` | `public_only` | `all`
-4) Publisher token path (local secret)
+Publishing is interactive and always prompts at run start whether to publish.
+
+The first time you publish (or if `upload_config` is missing), the wizard collects:
+1) Public identity (blank = derived pseudonym)
+2) Repo URL privacy mode: `none` | `public_only` | `all`
+3) Publisher token path (local secret)
+4) LLM coding inflection points (start date, “>90% by LLM” date)
+5) Primary LLM coding tool (initial + current) from a fixed list
+
+Once `upload_config` is set up, the wizard does not re-prompt for these values; update them by editing `config.json` under `upload_config.*`.
 
 If publishing is enabled, the tool will later:
 1) Print a payload preview (token redacted)
@@ -24,13 +29,7 @@ The client sends a stable `publisher_token` (a local secret) in the `X-Publisher
 Default location: `~/.config/git-analysis/publisher_token` (override in the wizard or via `config.json`).
 
 ## Server destination
-The server base URL is configured in `server.json`:
-
-```json
-{
-  "api_url": "http://localhost:3220"
-}
-```
+The server base URL is configured in `config.json` under `upload_config.api_url` (or overridden via `--upload-url`).
 
 Uploads are sent as:
 - `POST /api/v1/uploads`
@@ -41,5 +40,14 @@ Uploads are sent as:
   - `X-Payload-SHA256: <sha256 of uncompressed canonical JSON bytes>`
 
 ## Saved defaults
-Wizard answers are persisted to `config.json` under `publish.*` and reused as defaults in future prompts.
+Wizard answers are persisted to `config.json` under `upload_config.*` and reused as defaults in future prompts.
 
+Note: uploads are disabled when analysis is run with `--include-merges`, `--include-bootstraps`, or `--dedupe path` (non-standard runs).
+
+## Upload an existing report folder
+
+If a report folder already contains `json/upload_package_v1.json`, you can upload it without re-running analysis:
+
+```bash
+./cli.sh upload --report-dir reports/<run-type>/<timestamp> --yes
+```

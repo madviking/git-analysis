@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 from pathlib import Path
 
@@ -30,12 +31,14 @@ def discover_and_select_repos(
     remote_filter_mode: str,
     exclude_forks: bool,
     fork_remote_names: list[str],
+    excluded_repos: list[str],
     dedupe: str,
 ) -> tuple[
     list[Path],
     list[tuple[str, Path, str, str, str, list[str]]],
     list[dict[str, str]],
 ]:
+    excluded_pats = [str(p).strip() for p in (excluded_repos or []) if str(p).strip()]
     candidates = discover_git_roots(scan_root, exclude_dirnames)
 
     # Canonicalize and dedupe
@@ -46,6 +49,23 @@ def discover_and_select_repos(
         if top is None:
             selection_rows.append({"candidate_path": str(cand), "status": "skipped", "reason": "not_a_git_repo_after_rev_parse"})
             continue
+        if excluded_pats:
+            try:
+                rel = top.resolve().relative_to(scan_root.resolve()).as_posix()
+            except Exception:
+                rel = top.as_posix()
+            full = top.as_posix()
+            if any(fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(full, pat) for pat in excluded_pats):
+                selection_rows.append(
+                    {
+                        "candidate_path": str(cand),
+                        "repo_path": str(top),
+                        "status": "skipped",
+                        "reason": "excluded_repo",
+                        "pattern": ",".join(excluded_pats[:5]),
+                    }
+                )
+                continue
         remotes = get_remote_urls(top)
         if not remotes:
             selection_rows.append({"candidate_path": str(cand), "repo_path": str(top), "status": "skipped", "reason": "no_remotes"})

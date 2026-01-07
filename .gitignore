@@ -9,3 +9,4 @@ dist/
 reports/**
 config.json
 .idea
+!reports/example

@@ -101,7 +101,7 @@ def render_year_in_review(
         f"Deletions:      {fmt_int(int(year_agg.get('deletions_total', 0))):>12}  "
         f"(me {fmt_int(int(year_agg.get('deletions_me', 0))):>10}, others {fmt_int(int(year_agg.get('deletions_others', 0))):>10})"
     )
-    if int(year_agg_bootstraps.get("changed_total", 0)) > 0:
+    if include_bootstraps and int(year_agg_bootstraps.get("changed_total", 0)) > 0:
         lines.append(
             f"Bootstraps:     {fmt_int(int(year_agg_bootstraps.get('changed_total', 0))):>12}  "
             f"(commits {fmt_int(int(year_agg_bootstraps.get('commits_total', 0)))})"
@@ -235,7 +235,13 @@ def render_yoy_year_in_review(
 def pct_change(old: int, new: int) -> str:
     if old == 0:
         return "n/a" if new == 0 else "+inf"
-    return f"{((new - old) / old) * 100.0:+.1f}%"
+    pct = ((new - old) / old) * 100.0
+    abs_pct = abs(pct)
+    rounded = int(abs_pct + 0.5)  # round-half-up
+    if rounded == 0:
+        return "+0%"
+    sign = "+" if pct >= 0 else "-"
+    return f"{sign}{rounded}%"
 
 
 def write_comparison_md(
@@ -256,6 +262,7 @@ def write_comparison_md(
     y1_incl: dict | None = None,
     top_languages: int = 15,
     top_dirs: int = 20,
+    include_bootstraps: bool = False,
 ) -> None:
     a = str(y0.get("period") or y0.get("year"))
     b = str(y1.get("period") or y1.get("year"))
@@ -265,7 +272,7 @@ def write_comparison_md(
     lines.append("")
     lines.append(f"Repos analyzed: {int(y0.get('repos_total', 0)):,} ({a}), {int(y1.get('repos_total', 0)):,} ({b})")
     lines.append("")
-    lines.append("## Totals (excluding bootstraps)")
+    lines.append(f"## Totals ({'including' if include_bootstraps else 'excluding'} bootstraps)")
     lines.append("")
     lines.append(f"| Metric | {a} | {b} | Δ | Δ% |")
     lines.append("|---|---:|---:|---:|---:|")
@@ -363,7 +370,7 @@ def write_comparison_md(
         lines.append("")
 
     if languages0 is not None and languages1 is not None:
-        lines.append("## Languages (changed lines, excluding bootstraps)")
+        lines.append(f"## Languages (changed lines, {'including' if include_bootstraps else 'excluding'} bootstraps)")
         lines.append("")
         lines.append(f"| Language | {a} | {b} | Δ | Δ% |")
         lines.append("|---|---:|---:|---:|---:|")
@@ -376,7 +383,7 @@ def write_comparison_md(
             lines.append(f"| {lang} | {old:,} | {new:,} | {new-old:+,} | {pct_change(old, new)} |")
         lines.append("")
 
-        lines.append("## Languages (my changed lines, excluding bootstraps)")
+        lines.append(f"## Languages (my changed lines, {'including' if include_bootstraps else 'excluding'} bootstraps)")
         lines.append("")
         lines.append(f"| Language | {a} | {b} | Δ | Δ% |")
         lines.append("|---|---:|---:|---:|---:|")
@@ -388,7 +395,7 @@ def write_comparison_md(
         lines.append("")
 
     if dirs0 is not None and dirs1 is not None:
-        lines.append("## Directories (changed lines, excluding bootstraps)")
+        lines.append(f"## Directories (changed lines, {'including' if include_bootstraps else 'excluding'} bootstraps)")
         lines.append("")
         lines.append(f"| Directory | {a} | {b} | Δ | Δ% |")
         lines.append("|---|---:|---:|---:|---:|")
@@ -399,7 +406,7 @@ def write_comparison_md(
             lines.append(f"| {d} | {old:,} | {new:,} | {new-old:+,} | {pct_change(old, new)} |")
         lines.append("")
 
-        lines.append("## Directories (my changed lines, excluding bootstraps)")
+        lines.append(f"## Directories (my changed lines, {'including' if include_bootstraps else 'excluding'} bootstraps)")
         lines.append("")
         lines.append(f"| Directory | {a} | {b} | Δ | Δ% |")
         lines.append("|---|---:|---:|---:|---:|")
@@ -436,3 +443,79 @@ def write_comparison_md(
 
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
+
+def render_comparison_txt_from_md(md: str) -> str:
+    """
+    Best-effort conversion of our generated comparison Markdown to a readable plain-text format,
+    including ASCII tables for pipe tables.
+    """
+
+    def is_table_sep_row(line: str) -> bool:
+        if not line.strip().startswith("|"):
+            return False
+        parts = [p.strip() for p in line.strip().strip("|").split("|")]
+        if not parts:
+            return False
+        for p in parts:
+            p2 = p.replace(":", "")
+            if not p2 or any(ch != "-" for ch in p2):
+                return False
+        return True
+
+    def split_table_row(line: str) -> list[str]:
+        return [p.strip() for p in line.strip().strip("|").split("|")]
+
+    def render_ascii_table(rows: list[list[str]]) -> list[str]:
+        if not rows:
+            return []
+        cols = max(len(r) for r in rows)
+        norm: list[list[str]] = [r + [""] * (cols - len(r)) for r in rows]
+        widths = [0] * cols
+        for r in norm:
+            for i, cell in enumerate(r):
+                widths[i] = max(widths[i], len(cell))
+
+        def hline() -> str:
+            return "+" + "+".join("-" * (w + 2) for w in widths) + "+"
+
+        out: list[str] = [hline()]
+        for idx, r in enumerate(norm):
+            out.append("|" + "|".join(f" {cell:<{widths[i]}} " for i, cell in enumerate(r)) + "|")
+            if idx == 0:
+                out.append(hline())
+        out.append(hline())
+        return out
+
+    lines = (md or "").splitlines()
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i].rstrip()
+        if line.startswith("|"):
+            table_lines: list[str] = []
+            while i < len(lines) and lines[i].strip().startswith("|"):
+                table_lines.append(lines[i].rstrip())
+                i += 1
+            rows: list[list[str]] = []
+            for tl in table_lines:
+                if is_table_sep_row(tl):
+                    continue
+                rows.append(split_table_row(tl))
+            out.extend(render_ascii_table(rows))
+            out.append("")
+            continue
+
+        if line.startswith("#"):
+            level = len(line) - len(line.lstrip("#"))
+            title = line[level:].strip()
+            if title:
+                out.append(title)
+                out.append(("=" if level == 1 else "-") * len(title))
+                out.append("")
+            i += 1
+            continue
+
+        out.append(line)
+        i += 1
+
+    return "\n".join(out).rstrip() + "\n"
