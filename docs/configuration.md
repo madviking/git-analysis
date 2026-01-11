@@ -51,8 +51,7 @@ Publishing uses an interactive wizard. The wizard persists defaults under:
       "primary_tool_initial": "none",
       "primary_tool_current": "none"
     },
-    "publisher": "",
-    "publisher_identity": { "kind": "pseudonym", "value": "", "verified": false },
+    "display_name": "",
     "publisher_token_path": "~/.config/git-analysis/publisher_token"
   }
 }
@@ -61,10 +60,7 @@ Publishing uses an interactive wizard. The wizard persists defaults under:
 Notes:
 - `default_publish` only controls the default shown in the prompt; the user is still prompted every run.
 - The full publish setup wizard runs only when `upload_config` is not yet configured; afterwards you can edit `config.json` directly to change `upload_config.*`.
-- `publisher_identity` controls the public identity:
-  - `kind="pseudonym"`: public identity is derived from `publisher_token` (no `value` required).
-  - `kind="github_username"`: `value` is a GitHub username and the payload marks `publisher.verified=true`.
-  - `kind="user_provided"`: `value` is an arbitrary custom string (not verified).
+- `display_name` is a user preference for your public profile name; it can be updated at any time via `./cli.sh display-name`.
 - `publisher_token_path` is a local secret used for replace semantics; keep it private.
 - `upload_years` controls which full years are included in uploads; uploads always include 2025 even if not listed.
 

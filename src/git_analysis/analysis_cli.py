@@ -9,7 +9,7 @@ from .analysis_run import run_analysis
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Aggregate yearly git stats across many repos.")
+    parser = argparse.ArgumentParser(prog="git-analysis", description="Aggregate yearly git stats across many repos.")
     parser.add_argument("--root", type=Path, default=Path(".."), help="Root directory to scan for git repos.")
     parser.add_argument("--years", type=int, nargs="+", default=[2024, 2025], help="Years to analyze.")
     parser.add_argument("--periods", type=str, nargs="+", default=None, help="Periods to analyze (YYYY, YYYYH1, YYYYH2).")
@@ -44,7 +44,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default="",
         help="Path to a CA bundle file/dir for HTTPS verification (overrides `upload_config.ca_bundle_path`).",
     )
-    parser.add_argument("--publisher", type=str, default="", help="Public identity string (optional; not verified).")
+    parser.add_argument(
+        "--publisher",
+        type=str,
+        default="",
+        help="Preferred public display name (applied post-upload via /api/v1/me/display-name).",
+    )
     parser.add_argument("--publisher-token-path", type=Path, default=None, help="Path to persist the local publisher token.")
     return parser
 

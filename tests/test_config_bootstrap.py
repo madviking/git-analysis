@@ -44,7 +44,7 @@ def test_ensure_config_file_creates_from_template_and_infers(tmp_path: Path, mon
                 "upload_config": {
                     "automatic_upload": "confirm",
                     "api_url": "",
-                    "publisher": "",
+                    "display_name": "",
                     "upload_years": [2024, 2025],
                     "publisher_token_path": "",
                     "llm_coding": {},

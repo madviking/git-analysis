@@ -20,7 +20,7 @@ The format is based on Keep a Changelog, and this project follows SemVer where a
 - Startup ASCII header describing what the run will do and where outputs are written.
 - `llm_inflection_stats` comparison report based on `upload_config.llm_coding.dominant_at`.
 - Weekly time series now includes per-week technology (language) breakdowns (`technologies` per week).
-- Publish wizard support for GitHub usernames as the public identity (`upload_config.publisher_identity`, flagged via `publisher.verified=true` in uploads).
+- Support updating the public profile display name via `POST /api/v1/me/display-name` (CLI: `./cli.sh display-name`, including `--pseudonym`).
 - Document `.venv/` usage for contributors/agents in `AGENTS.md`.
 
 ### Changed
@@ -34,6 +34,7 @@ The format is based on Keep a Changelog, and this project follows SemVer where a
 - Comparison markdown is written to `reports/.../markup/` (root keeps `comparison_*.txt`).
 - Unless `--include-bootstraps` is set, comparison reports only show the bootstrap-excluding view (no separate bootstraps/including tables).
 - “In review” report naming now reflects non-year periods (e.g. `period_in_review_2025H1_vs_2025H2.*` instead of `year_in_review_...`).
+- README now links directly to `docs/` pages (configuration, output, publishing, payload, development).
 
 ## [0.1.0]
 

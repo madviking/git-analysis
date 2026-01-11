@@ -4,7 +4,7 @@ Publishing is interactive and always prompts at run start whether to publish.
 
 The first time you publish (or if `upload_config` is missing), the wizard collects:
 1) Which years to include in the upload (full calendar years; 2025 is always included)
-2) Public identity mode: derived pseudonym (default), GitHub username (flagged as `verified`), or custom string (not verified)
+2) Public display name preference: derived pseudonym (default), GitHub username, or custom string
 3) Publisher token path (local secret)
 4) LLM coding inflection points (start date, “>90% by LLM” date)
 5) Primary LLM coding tool (initial + current) from a fixed list
@@ -17,6 +17,19 @@ If publishing is enabled, the tool will later:
 3) Prompt for final confirmation before upload
  
 Uploads contain only your own (“me”) stats (not aggregate stats across all authors) and contain no repo identifiers/URLs.
+
+## Display name updates
+The backend exposes an authenticated endpoint for changing the publicly shown username (profile display name).
+
+- Endpoint: `POST /api/v1/me/display-name`
+- Auth: `X-Publisher-Token: <publisherToken>` (same token used for uploads)
+
+You can update it without re-running analysis:
+
+```bash
+./cli.sh display-name --name "New Name"
+./cli.sh display-name --pseudonym
+```
 
 ## Replace semantics / publisher token
 The client sends a stable `publisher_token` (a local secret) in the `X-Publisher-Token` header. The server should store only a hash and use it to identify the publisher for replace semantics.

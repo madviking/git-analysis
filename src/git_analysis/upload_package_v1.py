@@ -132,6 +132,73 @@ def upload_package_v1(
         raise RuntimeError(msg) from e
 
 
+def _display_name_url_from_api_url(api_url: str) -> str:
+    u = (api_url or "").strip().rstrip("/")
+    if not u:
+        return ""
+    if u.endswith("/api/v1/me/display-name"):
+        return u
+    if u.endswith("/api/v1/uploads"):
+        u = u[: -len("/api/v1/uploads")].rstrip("/")
+    return u + "/api/v1/me/display-name"
+
+
+def update_display_name_v1(
+    *,
+    api_url: str,
+    publisher_token: str,
+    display_name: str,
+    timeout_s: int = 30,
+    ca_bundle_path: str = "",
+) -> dict[str, object]:
+    if not publisher_token.strip():
+        raise ValueError("publisher_token is required")
+    name = (display_name or "").strip()
+    if not name:
+        raise ValueError("display_name is required")
+    if len(name) > 80:
+        raise ValueError("display_name is too long (max 80 chars)")
+
+    url = _display_name_url_from_api_url(api_url)
+    if not url:
+        raise ValueError("api_url is required")
+
+    payload = json.dumps({"display_name": name}, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        method="POST",
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "X-Publisher-Token": publisher_token,
+        },
+    )
+    ctx = _ssl_context(ca_bundle_path=ca_bundle_path)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s, context=ctx) as resp:
+            code = int(getattr(resp, "status", 0) or 0)
+            body = resp.read().decode("utf-8", errors="replace")
+            if 200 <= code < 300:
+                try:
+                    obj = json.loads(body) if body else {}
+                except Exception:
+                    obj = {}
+                return obj if isinstance(obj, dict) else {}
+            raise RuntimeError(f"display-name update failed: HTTP {code}: {body[:500]}")
+    except urllib.error.HTTPError as e:
+        payload_s = ""
+        try:
+            payload_s = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            payload_s = ""
+        raise RuntimeError(f"display-name update failed: HTTP {e.code}: {payload_s[:500]}") from e
+    except urllib.error.URLError as e:
+        msg = f"display-name update failed: {e}"
+        if _is_cert_verify_error(e):
+            msg = msg + "\n" + _cert_verify_hint(ca_bundle_path=ca_bundle_path)
+        raise RuntimeError(msg) from e
+
+
 def _ssl_context(*, ca_bundle_path: str) -> ssl.SSLContext:
     cafile, capath = _resolve_ca_paths(ca_bundle_path)
     if cafile or capath:

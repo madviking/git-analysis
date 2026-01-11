@@ -37,7 +37,12 @@ Reports are written under `reports/<run-type>/<timestamp>/` and `reports/latest.
 
 ## Documentation
 
-Start here: `docs/index.md`.
+- [Docs index](docs/index.md)
+- [Configuration (`config.json`)](docs/configuration.md)
+- [Output structure](docs/output.md)
+- [Publishing (upload wizard)](docs/publishing.md)
+- [Upload payload (`upload_package_v1`)](docs/upload-payload.md)
+- [Development](docs/development.md)
 
 ## Publishing (upload wizard)
 
@@ -49,7 +54,7 @@ Publishing is what enables public stats pages (LLM tools proficiency summary, le
 Server destination is configured in `config.json` under `upload_config.api_url` (or override with `--upload-url`).
 
 Uploads contain only your own (“me”) stats (not aggregate totals across all authors), contain no repo identifiers/URLs, and are always sent as full calendar years; you’ll be prompted for which years to include (2025 is always included).
-Publishing identity can be a derived pseudonym (default) or a GitHub username (flagged as `verified` in the upload payload).
+You can update your public display name later via `./cli.sh display-name --name "New Name"` or reset it to a pseudonym via `./cli.sh display-name --pseudonym`.
 
 ## Development
 

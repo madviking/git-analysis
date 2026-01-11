@@ -28,17 +28,42 @@ def _commit_file(*, repo: Path, filename: str, content: str, author_date: str) -
 
 def test_publish_wizard_persists_config_and_uploads(tmp_path: Path) -> None:
     received: dict[str, object] = {}
+    requests: list[dict[str, object]] = []
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:  # noqa: N802
             if self.path != "/api/v1/uploads":
-                self.send_response(404)
+                if self.path != "/api/v1/me/display-name":
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                token = self.headers.get("X-Publisher-Token")
+                body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                requests.append({"path": self.path, "token": token, "body": body})
+                try:
+                    obj = json.loads(body.decode("utf-8"))
+                except Exception:
+                    self.send_response(400)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(b'{"error":"bad_request","message":"invalid json"}')
+                    return
+                received["display_name_req"] = obj
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
                 self.end_headers()
+                self.wfile.write(
+                    json.dumps(
+                        {"slug": "abc123", "display_name": str(obj.get("display_name", "")), "updated_at": "2026-01-07T00:00:00Z"}
+                    ).encode("utf-8")
+                )
                 return
+
             enc = self.headers.get("Content-Encoding")
             token = self.headers.get("X-Publisher-Token")
             sha = self.headers.get("X-Payload-SHA256")
             body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            requests.append({"path": self.path, "token": token, "sha": sha, "enc": enc, "body": body})
             if enc != "gzip" or not token or not sha:
                 self.send_response(400)
                 self.end_headers()
@@ -129,11 +154,7 @@ def test_publish_wizard_persists_config_and_uploads(tmp_path: Path) -> None:
 
     cfg = json.loads(config_path.read_text(encoding="utf-8"))
     up = cfg.get("upload_config") or {}
-    assert up.get("publisher") == "Alice"
-    pid = up.get("publisher_identity") or {}
-    assert pid.get("kind") == "user_provided"
-    assert pid.get("value") == "Alice"
-    assert bool(pid.get("verified", False)) is False
+    assert up.get("display_name") == "Alice"
     assert up.get("publisher_token_path") == str(token_path)
     llm = up.get("llm_coding") or {}
     assert (llm.get("started_at") or {}).get("value") == "2023-06"
@@ -145,9 +166,8 @@ def test_publish_wizard_persists_config_and_uploads(tmp_path: Path) -> None:
 
     payload = received.get("payload") or {}
     assert payload.get("schema_version") == "upload_package_v1"
-    assert (payload.get("publisher") or {}).get("value") == "Alice"
-    assert (payload.get("publisher") or {}).get("kind") == "user_provided"
-    assert bool((payload.get("publisher") or {}).get("verified", False)) is False
+    assert (payload.get("publisher") or {}).get("kind") == "pseudonym"
+    assert isinstance((payload.get("publisher") or {}).get("value"), str)
     llm2 = payload.get("llm_coding") or {}
     assert (llm2.get("started_at") or {}).get("value") == "2023-06"
     assert (llm2.get("dominant_at") or {}).get("value") == "2024-02-15"
@@ -156,6 +176,9 @@ def test_publish_wizard_persists_config_and_uploads(tmp_path: Path) -> None:
 
     assert "repos" not in payload
     assert "privacy" not in payload
+
+    assert [r.get("path") for r in requests] == ["/api/v1/uploads", "/api/v1/me/display-name"]
+    assert (received.get("display_name_req") or {}).get("display_name") == "Alice"
 
     year_totals = payload.get("year_totals") or []
     assert any(int(row.get("year")) == 2025 for row in year_totals if isinstance(row, dict))
@@ -193,7 +216,7 @@ def test_publish_wizard_skips_setup_when_config_present(tmp_path: Path) -> None:
         "upload_config": {
             "default_publish": False,
             "api_url": "http://example.invalid",
-            "publisher": "Alice",
+            "display_name": "Alice",
             "publisher_token_path": str(token_path),
             "upload_years": [2025],
             "llm_coding": {
@@ -228,7 +251,7 @@ def test_publish_wizard_skips_setup_when_config_present(tmp_path: Path) -> None:
     assert proc.returncode == 0, proc.stderr
 
     out = proc.stdout
-    assert "Public identity" not in out
+    assert "display name" not in out.lower()
     assert "Primary LLM coding tool when you started" not in out
     assert "Edit config.json" in out
     assert "Continuing analysis" in out
@@ -279,6 +302,12 @@ def test_publish_upload_years_always_include_2025(tmp_path: Path) -> None:
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:  # noqa: N802
             if self.path != "/api/v1/uploads":
+                if self.path == "/api/v1/me/display-name":
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(b'{"slug":"abc","display_name":"x","updated_at":"2026-01-07T00:00:00Z"}')
+                    return
                 self.send_response(404)
                 self.end_headers()
                 return
@@ -431,94 +460,3 @@ def test_publish_upload_http_error_is_graceful(tmp_path: Path) -> None:
     assert "Traceback" not in proc.stdout
     assert "Traceback" not in proc.stderr
     assert "upload failed: HTTP 400" in (proc.stdout + proc.stderr)
-
-
-def test_publish_wizard_supports_verified_github_username(tmp_path: Path) -> None:
-    received: dict[str, object] = {}
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_POST(self) -> None:  # noqa: N802
-            if self.path != "/api/v1/uploads":
-                self.send_response(404)
-                self.end_headers()
-                return
-            body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
-            raw = gzip.decompress(body)
-            received["payload"] = json.loads(raw.decode("utf-8"))
-            self.send_response(201)
-            self.end_headers()
-
-        def log_message(self, fmt: str, *args: object) -> None:
-            return
-
-    server = HTTPServer(("127.0.0.1", 0), Handler)
-    t = threading.Thread(target=server.serve_forever, daemon=True)
-    t.start()
-
-    scan_root = tmp_path / "scan"
-    repo = scan_root / "r"
-    repo.mkdir(parents=True)
-    _run(["git", "init"], cwd=repo)
-    _run(["git", "config", "user.name", "Test User"], cwd=repo)
-    _run(["git", "config", "user.email", "test@example.com"], cwd=repo)
-    _run(["git", "remote", "add", "origin", "git@github.com:org/repo.git"], cwd=repo)
-    _commit_file(repo=repo, filename="a.txt", content="a\n", author_date="2025-01-02T12:00:00Z")
-
-    config_path = tmp_path / "config.json"
-    config_path.write_text(
-        json.dumps(
-            {
-                "me_emails": ["test@example.com"],
-                "upload_config": {"api_url": f"http://127.0.0.1:{server.server_port}"},
-            }
-        ),
-        encoding="utf-8",
-    )
-    token_path = tmp_path / "publisher_token"
-
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str((Path(__file__).resolve().parents[1] / "src"))
-    cmd = [
-        str(Path(__file__).resolve().parents[1] / ".venv" / "bin" / "python"),
-        "-m",
-        "git_analysis.cli",
-        "--root",
-        str(scan_root),
-        "--years",
-        "2025",
-        "--config",
-        str(config_path),
-        "--jobs",
-        "1",
-    ]
-
-    answers = "\n".join(
-        [
-            "y",
-            "2025",
-            "github",
-            "trailo",
-            str(token_path),
-            "unknown",
-            "unknown",
-            "none",
-            "none",
-            "y",
-        ]
-    )
-    proc = subprocess.run(cmd, cwd=str(tmp_path), env=env, input=answers, text=True, capture_output=True)
-    server.shutdown()
-    assert proc.returncode == 0, proc.stderr
-
-    cfg = json.loads(config_path.read_text(encoding="utf-8"))
-    up = cfg.get("upload_config") or {}
-    pid = up.get("publisher_identity") or {}
-    assert pid.get("kind") == "github_username"
-    assert pid.get("value") == "trailo"
-    assert bool(pid.get("verified", False)) is True
-
-    payload = received.get("payload") or {}
-    pub = payload.get("publisher") or {}
-    assert pub.get("kind") == "github_username"
-    assert pub.get("value") == "trailo"
-    assert bool(pub.get("verified", False)) is True

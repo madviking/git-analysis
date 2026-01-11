@@ -26,12 +26,7 @@
       "primary_tool_initial": "none",
       "primary_tool_current": "none"
     },
-    "publisher": "",
-    "publisher_identity": {
-      "kind": "pseudonym",
-      "value": "",
-      "verified": false
-    },
+    "display_name": "",
     "publisher_token_path": "~/.config/git-analysis/publisher_token"
   },
   "excluded_repos": [
