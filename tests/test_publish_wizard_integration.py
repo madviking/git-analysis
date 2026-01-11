@@ -111,6 +111,7 @@ def test_publish_wizard_persists_config_and_uploads(tmp_path: Path) -> None:
     )
 
     token_path = tmp_path / "publisher_token"
+    key_path = tmp_path / "publisher_ed25519"
 
     env = os.environ.copy()
     env["PYTHONPATH"] = str((Path(__file__).resolve().parents[1] / "src"))
@@ -151,11 +152,23 @@ def test_publish_wizard_persists_config_and_uploads(tmp_path: Path) -> None:
     assert '"schema_version"' not in proc.stdout
     assert '"weekly"' not in proc.stdout
     assert "Upload package saved at:" in proc.stdout
+    assert "Publisher token (local secret):" in proc.stdout
+    assert str(token_path) in proc.stdout
+    assert "not derived from SSH keys" in proc.stdout
+    assert "Publisher key (Ed25519):" in proc.stdout
+    assert str(key_path) in proc.stdout
+    assert "ssh-ed25519 " in proc.stdout
+    assert f"API POST http://127.0.0.1:{server.server_port}/api/v1/uploads" in proc.stdout
+    assert "Payload:" in proc.stdout
+    assert "upload_package_v1.json" in proc.stdout
+    assert f"API POST http://127.0.0.1:{server.server_port}/api/v1/me/display-name" in proc.stdout
+    assert '{"display_name":"Alice"}' in proc.stdout
 
     cfg = json.loads(config_path.read_text(encoding="utf-8"))
     up = cfg.get("upload_config") or {}
     assert up.get("display_name") == "Alice"
     assert up.get("publisher_token_path") == str(token_path)
+    assert up.get("publisher_key_path") == str(key_path)
     llm = up.get("llm_coding") or {}
     assert (llm.get("started_at") or {}).get("value") == "2023-06"
     assert (llm.get("started_at") or {}).get("precision") == "month"
@@ -168,6 +181,9 @@ def test_publish_wizard_persists_config_and_uploads(tmp_path: Path) -> None:
     assert payload.get("schema_version") == "upload_package_v1"
     assert (payload.get("publisher") or {}).get("kind") == "pseudonym"
     assert isinstance((payload.get("publisher") or {}).get("value"), str)
+    pubkey = str((payload.get("publisher") or {}).get("public_key") or "")
+    assert pubkey.startswith("ssh-ed25519 ")
+    assert len(pubkey.split()) == 2
     llm2 = payload.get("llm_coding") or {}
     assert (llm2.get("started_at") or {}).get("value") == "2023-06"
     assert (llm2.get("dominant_at") or {}).get("value") == "2024-02-15"
@@ -212,12 +228,14 @@ def test_publish_wizard_skips_setup_when_config_present(tmp_path: Path) -> None:
 
     config_path = tmp_path / "config.json"
     token_path = tmp_path / "publisher_token"
+    key_path = tmp_path / "publisher_ed25519"
     config = {
         "upload_config": {
             "default_publish": False,
             "api_url": "http://example.invalid",
             "display_name": "Alice",
             "publisher_token_path": str(token_path),
+            "publisher_key_path": str(key_path),
             "upload_years": [2025],
             "llm_coding": {
                 "started_at": {"value": "2023-06", "precision": "month"},

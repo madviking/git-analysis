@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 from . import analyze
-from .publish import set_profile_display_name, upload_existing_report_dir
+from .publish import set_profile_display_name, upload_existing_report_dir, verify_github_username
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -22,6 +22,7 @@ def main(argv: list[str] | None = None) -> int:
         print("commands:")
         print("  upload         Upload an existing report folder.")
         print("  display-name   Update your public display name on the upload server.")
+        print("  github-verify  Verify a GitHub username by SSH key ownership (no OAuth).")
         print("")
         print("Run `git-analysis <command> --help` for command-specific options.")
         return 0
@@ -55,6 +56,19 @@ def main(argv: list[str] | None = None) -> int:
             display_name=str(args.name or ""),
             github_username=str(args.github or ""),
             use_pseudonym=bool(args.pseudonym),
+            api_url_override=str(args.api_url or ""),
+            ca_bundle_path_override=str(args.ca_bundle or ""),
+        )
+    if argv and argv[0] == "github-verify":
+        p = argparse.ArgumentParser(prog="git-analysis github-verify", description="Verify a GitHub username by SSH key ownership (no OAuth).")
+        p.add_argument("--config", type=Path, default=Path("config.json"), help="Path to config.json.")
+        p.add_argument("--api-url", type=str, default="", help="Override `upload_config.api_url`.")
+        p.add_argument("--ca-bundle", type=str, default="", help="Path to a CA bundle file/dir for HTTPS verification (overrides `upload_config.ca_bundle_path`).")
+        p.add_argument("--username", type=str, required=True, help="GitHub username to verify.")
+        args = p.parse_args(argv[1:])
+        return verify_github_username(
+            config_path=args.config,
+            github_username=str(args.username or ""),
             api_url_override=str(args.api_url or ""),
             ca_bundle_path_override=str(args.ca_bundle or ""),
         )

@@ -8,9 +8,12 @@ The format is based on Keep a Changelog, and this project follows SemVer where a
 
 ### Fixed
 - Prevent `git log` deadlocks by draining stderr while streaming stdout (fixes analysis runs hanging near completion).
+- Period boundaries now include commits on the start date (previously some start-day commits were incorrectly excluded).
 - Bootstrap detection now also excludes deletion-dominant bulk commits (e.g. removing a large generated directory) when they meet the configured thresholds.
+- Bootstrap detection now also catches extreme outliers (very large one-sided commits, or very large multi-file sweeps) even when they miss the standard “shape” thresholds.
 - Graceful upload failures: HTTP errors no longer show Python tracebacks; payload path and retry hint are printed instead.
 - Upload preview no longer prints the full JSON payload; it prints a summary and a file path, then prompts for confirmation.
+- Upload now treats `HTTP 409` duplicate-payload responses as a successful no-op (idempotent retry).
 - HTTPS uploads now auto-discover a CA trust store (including a macOS Keychain-derived cache when needed); private CAs can be supplied via `upload_config.ca_bundle_path` / `--ca-bundle`.
 
 ### Added
@@ -21,12 +24,18 @@ The format is based on Keep a Changelog, and this project follows SemVer where a
 - `llm_inflection_stats` comparison report based on `upload_config.llm_coding.dominant_at`.
 - Weekly time series now includes per-week technology (language) breakdowns (`technologies` per week).
 - Support updating the public profile display name via `POST /api/v1/me/display-name` (CLI: `./cli.sh display-name`, including `--pseudonym`).
+- GitHub username verification (no OAuth) via `POST /api/v1/me/github/verify/challenge` + `.../confirm` (CLI: `./cli.sh github-verify`).
+- CLI prints each API request before sending it (URL + payload path for uploads, inline JSON for small requests).
+- CLI explains publisher token creation (random local secret; not derived from SSH keys/private keys).
 - Document `.venv/` usage for contributors/agents in `AGENTS.md`.
+- `exclude_commits` config for excluding specific commit SHAs from stats, plus `csv/top_commits.csv` to help find large commits by churn.
+- Codex skills for report triage and spike investigation under `skills/`.
 
 ### Changed
 - Upload/publish defaults now persist under `config.json` → `upload_config.*` (backward-compatible read of legacy `publish` block remains).
 - Upload destination now comes from `upload_config.api_url` (or `--upload-url`); legacy `server.json`/`server-config.json` are no longer used.
 - Upload payload now contains only “me” stats, excludes bootstraps, excludes all repo identifiers/URLs, adds repo counts (`repos_total`, `repos_active`, `repos_new`) in `year_totals` and each weekly row, and prompts for which full years to upload (2025 always included).
+- Upload payload `publisher` now includes `public_key` (OpenSSH `ssh-ed25519 <base64>`) for GitHub verification.
 - Rendered percentages no longer include decimals (e.g. `+33%` instead of `+33.3%`).
 - Report `.txt`/`.md` outputs abbreviate large numbers (e.g. `1K`, `2.5M`) including large percentage deltas.
 - Expanded default exclusion lists in `config-template.json` for common build/cache directories and generated paths.

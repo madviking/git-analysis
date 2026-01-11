@@ -43,6 +43,7 @@ def _empty_repo_result(*, repo_key: str = "k") -> RepoResult:
         me_monthly_tech_by_period_bootstraps={},
         excluded_by_period={},
         bootstrap_commits_by_period={},
+        top_commits_by_period={},
         errors=[],
     )
 

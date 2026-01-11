@@ -61,6 +61,11 @@ def test_display_name_cli_can_reset_to_pseudonym(tmp_path: Path) -> None:
     proc = subprocess.run(cmd, cwd=str(tmp_path), env=env, text=True, capture_output=True)
     server.shutdown()
     assert proc.returncode == 0, proc.stderr
+    assert "Publisher token (local secret):" in proc.stdout
+    assert str(token_path) in proc.stdout
+    assert "local secret" in proc.stdout
+    assert f"API POST http://127.0.0.1:{server.server_port}/api/v1/me/display-name" in proc.stdout
+    assert f'{{"display_name":"{expected}"}}' in proc.stdout
 
     obj = json.loads((received.get("body") or b"").decode("utf-8"))
     assert obj.get("display_name") == expected

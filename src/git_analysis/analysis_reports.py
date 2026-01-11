@@ -27,6 +27,7 @@ from .analysis_write import (
     write_repo_selection_csv,
     write_repo_selection_summary,
     write_repos_csv,
+    write_top_commits_csv,
 )
 from .identity import MeMatcher
 from .models import AuthorStats, BootstrapConfig, RepoResult
@@ -390,6 +391,7 @@ def write_reports(
         )
 
     write_repo_activity_csv(csv_dir / "repo_activity.csv", results, [p.label for p in periods])
+    write_top_commits_csv(csv_dir / "top_commits.csv", results, [p.label for p in periods], limit=50)
     if detailed:
         write_json(timeseries_dir / "me_timeseries.json", {"generated_at": generated_at, "periods": detailed_periods})
 

@@ -14,16 +14,40 @@ from .analysis_periods import Period
 from .config import load_config, save_config
 from .identity import normalize_github_username
 from .models import RepoResult
-from .upload_package_v1 import canonical_json_bytes, ensure_publisher_token, update_display_name_v1, upload_package_v1
+from .upload_package_v1 import (
+    canonical_json_bytes,
+    ensure_publisher_ed25519_keypair,
+    ensure_publisher_token,
+    github_verify_challenge_v1,
+    github_verify_confirm_v1,
+    sign_publisher_ed25519_message_base64,
+    update_display_name_v1,
+    upload_package_v1,
+)
 
 
 def default_publisher_token_path() -> Path:
     return Path.home() / ".config" / "git-analysis" / "publisher_token"
 
 
+def default_publisher_key_path(*, token_path: Path) -> Path:
+    """
+    Default publisher key path is colocated with the publisher token for a shared lifecycle.
+    """
+    tp = Path(token_path).expanduser()
+    return tp.parent / "publisher_ed25519"
+
+
 def pseudonym_for_token(token: str) -> str:
     h = hashlib.sha256(token.encode("utf-8")).hexdigest()
     return f"anon-{h[:12]}"
+
+
+def _publisher_key_path_from_upload_cfg(*, upload_cfg: dict[str, object], token_path: Path) -> Path:
+    key_path_s = str(upload_cfg.get("publisher_key_path", "") or "").strip()
+    if key_path_s:
+        return Path(key_path_s).expanduser()
+    return default_publisher_key_path(token_path=token_path)
 
 
 def _prompt_bool(prompt: str, *, default: bool) -> bool:
@@ -220,12 +244,24 @@ def _upload_url_from_api_url(api_url: str) -> str:
     return u + "/api/v1/uploads"
 
 
+def _display_name_url_from_api_url(api_url: str) -> str:
+    u = (api_url or "").strip().rstrip("/")
+    if not u:
+        return ""
+    if u.endswith("/api/v1/me/display-name"):
+        return u
+    if u.endswith("/api/v1/uploads"):
+        u = u[: -len("/api/v1/uploads")].rstrip("/")
+    return u + "/api/v1/me/display-name"
+
+
 @dataclasses.dataclass(frozen=True)
 class PublishInputs:
     publish: bool
     display_name: str
     publisher_token_path: Path
     upload_years: list[int]
+
 
 def _is_valid_github_username(username: str) -> bool:
     s = normalize_github_username(username)
@@ -395,6 +431,8 @@ def collect_publish_inputs(*, args: object, config_path: Path, config: dict, rep
         if arg_token_path is not None:
             token_path = Path(arg_token_path).expanduser()
             upload_cfg["publisher_token_path"] = str(token_path)
+        if not str(upload_cfg.get("publisher_key_path", "") or "").strip():
+            upload_cfg["publisher_key_path"] = str(default_publisher_key_path(token_path=token_path))
         config["upload_config"] = upload_cfg
         save_config(config_path, config)
 
@@ -418,6 +456,7 @@ def collect_publish_inputs(*, args: object, config_path: Path, config: dict, rep
     upload_cfg["display_name"] = display_name
     upload_cfg["publisher"] = display_name
     upload_cfg["publisher_token_path"] = str(token_path)
+    upload_cfg["publisher_key_path"] = str(default_publisher_key_path(token_path=token_path))
     upload_cfg["llm_coding"] = _prompt_llm_coding(upload_cfg)
     config["upload_config"] = upload_cfg
     save_config(config_path, config)
@@ -436,6 +475,7 @@ def build_upload_payload_from_results(
     results: list[RepoResult],
     publisher_kind: str,
     publisher_value: str,
+    publisher_public_key: str,
     llm_coding: dict[str, object] | None = None,
 ) -> dict:
     generated_at = dt.datetime.now(tz=dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -548,7 +588,7 @@ def build_upload_payload_from_results(
         "toolkit_version": __version__,
         "data_scope": "me",
         "repos_total": len(results),
-        "publisher": {"kind": publisher_kind, "value": publisher_value},
+        "publisher": {"kind": publisher_kind, "value": publisher_value, "public_key": str(publisher_public_key or "")},
         "periods": [{"label": p.label, "start": p.start_iso, "end": p.end_iso} for p in periods],
         "year_totals": year_totals,
         "weekly": {
@@ -577,12 +617,14 @@ def publish_with_wizard(
     if not inputs.publish:
         return
 
-    token = ensure_publisher_token(inputs.publisher_token_path)
+    token = _ensure_publisher_token_with_ui(inputs.publisher_token_path)
+    upload_cfg = _load_upload_cfg(config_path)
+    key_path = _publisher_key_path_from_upload_cfg(upload_cfg=upload_cfg, token_path=inputs.publisher_token_path)
+    public_key = _ensure_publisher_keypair_with_ui(key_path)
 
     publisher_kind = "pseudonym"
     publisher_value = pseudonym_for_token(token)
 
-    upload_cfg = _load_upload_cfg(config_path)
     llm_coding = upload_cfg.get("llm_coding") if isinstance(upload_cfg.get("llm_coding"), dict) else None
     ca_bundle_path = str(upload_cfg.get("ca_bundle_path", "") or "").strip()
     override_ca_bundle = str(getattr(args, "ca_bundle", "") or "").strip() if args is not None else ""
@@ -594,6 +636,7 @@ def publish_with_wizard(
         results=results,
         publisher_kind=publisher_kind,
         publisher_value=publisher_value,
+        publisher_public_key=public_key,
         llm_coding=llm_coding,
     )
     payload_bytes = canonical_json_bytes(payload)
@@ -631,6 +674,7 @@ def publish_with_wizard(
     if not upload_url:
         raise RuntimeError("upload_url is required for publishing")
 
+    _print_api_call(method="POST", url=upload_url, payload_path=out_path)
     print("Uploading...")
     upload_package_v1(
         upload_url=upload_url,
@@ -645,6 +689,11 @@ def publish_with_wizard(
     display_name = (inputs.display_name or "").strip()
     if not display_name:
         display_name = pseudonym_for_token(token)
+    _print_api_call(
+        method="POST",
+        url=_display_name_url_from_api_url(api_url),
+        payload={"display_name": display_name},
+    )
     update_display_name_v1(
         api_url=api_url,
         publisher_token=token,
@@ -657,6 +706,51 @@ def publish_with_wizard(
 
 def json_preview(data: object) -> str:
     return json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False)
+
+
+def json_compact(data: object) -> str:
+    return json.dumps(data, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+
+
+def _print_api_call(*, method: str, url: str, payload: object | None = None, payload_path: Path | None = None) -> None:
+    m = (method or "").strip().upper() or "GET"
+    u = str(url or "").strip()
+    if not u:
+        return
+    print(f"API {m} {u}")
+    if payload_path is not None:
+        print(f"Payload: {payload_path}")
+        return
+    if payload is not None:
+        s = json_compact(payload)
+        if len(s) <= 800:
+            print(f"Payload: {s}")
+        else:
+            print(f"Payload: {s[:797]}...")
+
+def _ensure_publisher_token_with_ui(path: Path) -> str:
+    p = Path(path).expanduser()
+    existed = p.exists()
+    print(f"Publisher token (local secret): {p}")
+    if existed:
+        print("Using existing token file (not derived from SSH keys or other private keys).")
+    else:
+        print("Generating a new random token locally (not derived from SSH keys or other private keys).")
+    print("The token is sent only as X-Publisher-Token; delete the file to regenerate.")
+    return ensure_publisher_token(p)
+
+
+def _ensure_publisher_keypair_with_ui(private_key_path: Path) -> str:
+    p = Path(private_key_path).expanduser()
+    existed = p.exists()
+    print(f"Publisher key (Ed25519): {p}")
+    if existed:
+        print("Using existing keypair; the public key is included in uploads.")
+    else:
+        print("Generating a new Ed25519 keypair locally; only the public key is uploaded.")
+    pub_line = ensure_publisher_ed25519_keypair(p)
+    print(pub_line)
+    return pub_line
 
 
 def _upload_summary_lines(*, payload: dict, payload_path: Path, payload_sha256: str) -> list[str]:
@@ -739,7 +833,7 @@ def set_profile_display_name(
 
     token_path_s = str(upload_cfg.get("publisher_token_path", "") or "").strip()
     token_path = Path(token_path_s).expanduser() if token_path_s else default_publisher_token_path()
-    token = ensure_publisher_token(token_path)
+    token = _ensure_publisher_token_with_ui(token_path)
 
     ca_bundle_path = str(upload_cfg.get("ca_bundle_path", "") or "").strip()
     if str(ca_bundle_path_override or "").strip():
@@ -759,6 +853,11 @@ def set_profile_display_name(
             return 2
 
     try:
+        _print_api_call(
+            method="POST",
+            url=_display_name_url_from_api_url(api_url),
+            payload={"display_name": name},
+        )
         resp = update_display_name_v1(
             api_url=api_url,
             publisher_token=token,
@@ -845,16 +944,30 @@ def upload_existing_report_dir(
             print("Error: upload payload weekly.series_by_period must map period label -> list; refusing to upload")
             return 2
 
-    payload_bytes = canonical_json_bytes(payload_obj)
-    sha = hashlib.sha256(payload_bytes).hexdigest()
-
     upload_cfg = _load_upload_cfg(config_path)
     token_path_s = str(upload_cfg.get("publisher_token_path", "") or "").strip()
     token_path = Path(token_path_s).expanduser() if token_path_s else default_publisher_token_path()
-    token = ensure_publisher_token(token_path)
+    token = _ensure_publisher_token_with_ui(token_path)
+    key_path = _publisher_key_path_from_upload_cfg(upload_cfg=upload_cfg, token_path=token_path)
+    public_key = _ensure_publisher_keypair_with_ui(key_path)
     ca_bundle_path = str(upload_cfg.get("ca_bundle_path", "") or "").strip()
     if str(ca_bundle_path_override or "").strip():
         ca_bundle_path = str(ca_bundle_path_override or "").strip()
+
+    publisher = payload_obj.get("publisher")
+    if not isinstance(publisher, dict):
+        print("Error: upload payload missing publisher object; refusing to upload")
+        return 2
+    if not str(publisher.get("public_key", "") or "").strip():
+        publisher["public_key"] = public_key
+        payload_obj["publisher"] = publisher
+        try:
+            payload_path.write_bytes(canonical_json_bytes(payload_obj))
+        except Exception:
+            pass
+
+    payload_bytes = canonical_json_bytes(payload_obj)
+    sha = hashlib.sha256(payload_bytes).hexdigest()
 
     _print_upload_summary(payload=payload_obj, payload_path=payload_path, payload_sha256=sha)
 
@@ -893,6 +1006,7 @@ def upload_existing_report_dir(
         return 2
 
     try:
+        _print_api_call(method="POST", url=upload_url, payload_path=payload_path)
         print("Uploading...")
         upload_package_v1(
             upload_url=upload_url,
@@ -913,3 +1027,90 @@ def upload_existing_report_dir(
             print("Hint: your server appears to expect an older upload schema; update the backend to accept the current payload format.")
         return 2
     return 0
+
+
+def verify_github_username(
+    *,
+    config_path: Path,
+    github_username: str,
+    api_url_override: str = "",
+    ca_bundle_path_override: str = "",
+) -> int:
+    upload_cfg = _load_upload_cfg(config_path)
+    api_url = str(api_url_override or upload_cfg.get("api_url", "") or "").strip()
+    if not api_url:
+        print("Error: upload_config.api_url is required")
+        return 2
+
+    token_path_s = str(upload_cfg.get("publisher_token_path", "") or "").strip()
+    token_path = Path(token_path_s).expanduser() if token_path_s else default_publisher_token_path()
+    token = _ensure_publisher_token_with_ui(token_path)
+
+    key_path = _publisher_key_path_from_upload_cfg(upload_cfg=upload_cfg, token_path=token_path)
+    public_key = _ensure_publisher_keypair_with_ui(key_path)
+
+    ca_bundle_path = str(upload_cfg.get("ca_bundle_path", "") or "").strip()
+    if str(ca_bundle_path_override or "").strip():
+        ca_bundle_path = str(ca_bundle_path_override or "").strip()
+
+    username = normalize_github_username(github_username)
+    if not _is_valid_github_username(username):
+        print("Error: invalid GitHub username")
+        return 2
+
+    print("")
+    print("We verify by checking that your toolkit key is listed on your GitHub account (no OAuth, no repo access).")
+    print("Add this key at: GitHub → Settings → SSH and GPG keys → New SSH key:")
+    print(public_key)
+    print("")
+
+    try:
+        _print_api_call(
+            method="POST",
+            url=str(api_url).rstrip("/") + "/api/v1/me/github/verify/challenge",
+            payload={"github_username": username},
+        )
+        ch = github_verify_challenge_v1(
+            api_url=api_url,
+            publisher_token=token,
+            github_username=username,
+            timeout_s=30,
+            ca_bundle_path=ca_bundle_path,
+        )
+        challenge = str(ch.get("challenge", "") or "").strip()
+        message_to_sign = str(ch.get("message_to_sign", "") or "")
+        if not challenge or not message_to_sign:
+            raise RuntimeError("github-verify challenge response missing fields")
+
+        sig_b64 = sign_publisher_ed25519_message_base64(private_key_path=key_path, message_to_sign=message_to_sign)
+        _print_api_call(
+            method="POST",
+            url=str(api_url).rstrip("/") + "/api/v1/me/github/verify/confirm",
+            payload={"github_username": username, "challenge": challenge, "signature": sig_b64},
+        )
+        resp = github_verify_confirm_v1(
+            api_url=api_url,
+            publisher_token=token,
+            github_username=username,
+            challenge=challenge,
+            signature=sig_b64,
+            timeout_s=30,
+            ca_bundle_path=ca_bundle_path,
+        )
+    except RuntimeError as e:
+        msg = str(e).strip()
+        print(msg or "Error: GitHub verification failed")
+        if "HTTP 404" in msg:
+            print("Hint: upload once first to create a profile, then retry verification.")
+        return 2
+
+    if bool(resp.get("verified", False)):
+        verified_at = str(resp.get("verified_at", "") or "").strip()
+        if verified_at:
+            print(f"GitHub username verified: {username} (verified_at={verified_at})")
+        else:
+            print(f"GitHub username verified: {username}")
+        return 0
+
+    print("GitHub verification not confirmed; retry after adding the SSH key to GitHub.")
+    return 2

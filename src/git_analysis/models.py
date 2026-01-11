@@ -68,6 +68,7 @@ class RepoResult:
     me_monthly_tech_by_period_bootstraps: dict[str, dict[str, dict[str, dict[str, int]]]]  # month -> tech -> {commits,insertions,deletions}
     excluded_by_period: dict[str, dict[str, int]]  # counters for excluded paths
     bootstrap_commits_by_period: dict[str, list[dict[str, object]]]
+    top_commits_by_period: dict[str, list[dict[str, object]]]
     errors: list[str]
 
 
@@ -81,12 +82,22 @@ class BootstrapConfig:
         changed = insertions + deletions
         if changed < self.changed_threshold:
             return False
-        if files_touched < self.files_threshold:
-            return False
         if changed <= 0:
             return False
-        # "Bootstraps" are bulk-churn commits that dominate a period:
-        # typically mostly insertions (project scaffolding/import), but sometimes mostly deletions (large cleanup).
         dominant = max(insertions, deletions)
         ratio = dominant / changed
-        return ratio >= self.addition_ratio
+        # "Bootstraps" are bulk-churn commits that dominate a period:
+        # typically mostly insertions (project scaffolding/import), but sometimes mostly deletions (large cleanup).
+        #
+        # Some extreme outliers don't match the usual shape:
+        # - Huge one-sided commits with surprisingly few files (e.g. importing a large snapshot set)
+        # - Huge multi-file sweeps that are less one-sided (e.g. moves/renames during an import)
+        #
+        # To keep config simple, we derive these heuristics from the existing thresholds.
+        if files_touched >= self.files_threshold and ratio >= self.addition_ratio:
+            return True
+        if ratio >= self.addition_ratio and changed >= (self.changed_threshold * 8):
+            return True
+        if files_touched >= (self.files_threshold * 5) and changed >= (self.changed_threshold * 4):
+            return True
+        return False

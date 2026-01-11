@@ -14,5 +14,5 @@ def test_root_help_mentions_commands(tmp_path: Path) -> None:
     out = proc.stdout
     assert "upload" in out
     assert "display-name" in out
+    assert "github-verify" in out
     assert "Aggregate yearly git stats" in out
-

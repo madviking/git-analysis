@@ -5,6 +5,7 @@ import subprocess
 import threading
 from collections import defaultdict
 from pathlib import Path
+from heapq import heapify, heapreplace, heappush
 
 from .analysis_paths import dir_key_for_path, language_for_path, normalize_numstat_path, should_exclude_path
 from .analysis_periods import Period
@@ -40,6 +41,7 @@ def parse_numstat_stream(
     exclude_path_prefixes: list[str],
     exclude_path_globs: list[str],
     bootstrap_exclude_shas: set[str] | None = None,
+    exclude_commits: set[str] | None = None,
 ) -> tuple[
     RepoYearStats,  # excl bootstraps
     RepoYearStats,  # bootstraps only
@@ -63,10 +65,11 @@ def parse_numstat_stream(
     dict[str, dict[str, dict[str, int]]],  # me monthly tech bootstraps: month -> tech -> {commits,insertions,deletions}
     dict[str, int],  # excluded path counters
     list[dict[str, object]],  # bootstrap commits
+    list[dict[str, object]],  # top commits by size
     list[str],  # errors
 ]:
-    start = period.start_iso
-    end = period.end_iso
+    start = f"{period.start_iso}T00:00:00Z"
+    end = f"{period.end_iso}T00:00:00Z"
 
     pretty = "@@@%H\t%an\t%ae\t%aI\t%s"
     cmd = [
@@ -125,6 +128,8 @@ def parse_numstat_stream(
         "excluded_changed": 0,
     }
     bootstrap_commits: list[dict[str, object]] = []
+    top_commits_heap: list[tuple[int, str, str, dict[str, object]]] = []
+    heapify(top_commits_heap)
     errors: list[str] = []
 
     current_sha = ""
@@ -138,17 +143,46 @@ def parse_numstat_stream(
     current_files_touched = 0
     current_langs: dict[str, tuple[int, int]] = defaultdict(lambda: (0, 0))
     current_dirs: dict[str, tuple[int, int]] = defaultdict(lambda: (0, 0))
+    current_excluded_files = 0
+    current_excluded_insertions = 0
+    current_excluded_deletions = 0
+    current_excluded_changed = 0
 
     def apply_commit() -> None:
         nonlocal current_sha, current_author_name, current_author_email, current_author_is_me
         nonlocal current_commit_iso, current_subject, current_insertions, current_deletions, current_files_touched
         nonlocal current_langs, current_dirs
+        nonlocal current_excluded_files, current_excluded_insertions, current_excluded_deletions, current_excluded_changed
 
         if not current_sha:
             return
 
-        excluded = bootstrap_exclude_shas or set()
-        is_boot = bootstrap.is_bootstrap(current_insertions, current_deletions, current_files_touched) and current_sha not in excluded
+        excluded_commits = exclude_commits or set()
+        if current_sha in excluded_commits:
+            current_sha = ""
+            current_author_name = ""
+            current_author_email = ""
+            current_author_is_me = False
+            current_commit_iso = ""
+            current_subject = ""
+            current_insertions = 0
+            current_deletions = 0
+            current_files_touched = 0
+            current_langs = defaultdict(lambda: (0, 0))
+            current_dirs = defaultdict(lambda: (0, 0))
+            current_excluded_files = 0
+            current_excluded_insertions = 0
+            current_excluded_deletions = 0
+            current_excluded_changed = 0
+            return
+
+        excluded["excluded_files"] += current_excluded_files
+        excluded["excluded_insertions"] += current_excluded_insertions
+        excluded["excluded_deletions"] += current_excluded_deletions
+        excluded["excluded_changed"] += current_excluded_changed
+
+        bootstrap_shas_excluded = bootstrap_exclude_shas or set()
+        is_boot = bootstrap.is_bootstrap(current_insertions, current_deletions, current_files_touched) and current_sha not in bootstrap_shas_excluded
         stats_target = stats_boot if is_boot else stats_excl
         weekly_target = weekly_boot if is_boot else weekly_excl
         weekly_tech_target = weekly_tech_boot if is_boot else weekly_tech_excl
@@ -241,6 +275,31 @@ def parse_numstat_stream(
                 }
             )
 
+        commit_row: dict[str, object] = {
+            "sha": current_sha,
+            "commit_iso": current_commit_iso,
+            "author_name": current_author_name,
+            "author_email": current_author_email,
+            "is_me": bool(current_author_is_me),
+            "is_bootstrap": bool(is_boot),
+            "subject": current_subject,
+            "files_touched": int(current_files_touched),
+            "insertions": int(current_insertions),
+            "deletions": int(current_deletions),
+            "changed": int(current_insertions + current_deletions),
+        }
+        entry = (
+            int(commit_row.get("changed", 0)),
+            str(commit_row.get("sha", "")),
+            str(commit_row.get("commit_iso", "")),
+            commit_row,
+        )
+        if len(top_commits_heap) < 50:
+            heappush(top_commits_heap, entry)
+        else:
+            if entry > top_commits_heap[0]:
+                heapreplace(top_commits_heap, entry)
+
         current_sha = ""
         current_author_name = ""
         current_author_email = ""
@@ -252,6 +311,10 @@ def parse_numstat_stream(
         current_files_touched = 0
         current_langs = defaultdict(lambda: (0, 0))
         current_dirs = defaultdict(lambda: (0, 0))
+        current_excluded_files = 0
+        current_excluded_insertions = 0
+        current_excluded_deletions = 0
+        current_excluded_changed = 0
 
     try:
         proc = subprocess.Popen(
@@ -285,6 +348,7 @@ def parse_numstat_stream(
             {m: dict(v) for m, v in me_monthly_tech_boot.items()},
             dict(excluded),
             bootstrap_commits,
+            [],
             [f"failed to start git log: {e}"],
         )
 
@@ -343,10 +407,10 @@ def parse_numstat_stream(
                 continue
 
         if file_path and should_exclude_path(file_path, exclude_path_prefixes, exclude_path_globs):
-            excluded["excluded_files"] += 1
-            excluded["excluded_insertions"] += added
-            excluded["excluded_deletions"] += deleted
-            excluded["excluded_changed"] += added + deleted
+            current_excluded_files += 1
+            current_excluded_insertions += added
+            current_excluded_deletions += deleted
+            current_excluded_changed += added + deleted
             continue
 
         if file_path:
@@ -371,6 +435,9 @@ def parse_numstat_stream(
 
     apply_commit()
 
+    top_commits = [t[-1] for t in top_commits_heap]
+    top_commits.sort(key=lambda d: (-int(d.get("changed", 0)), str(d.get("sha", ""))))
+
     return (
         stats_excl,
         stats_boot,
@@ -394,6 +461,7 @@ def parse_numstat_stream(
         {m: dict(v) for m, v in me_monthly_tech_boot.items()},
         dict(excluded),
         bootstrap_commits,
+        top_commits,
         errors,
     )
 
@@ -412,6 +480,7 @@ def analyze_repo(
     exclude_path_prefixes: list[str],
     exclude_path_globs: list[str],
     bootstrap_exclude_shas: set[str] | None = None,
+    exclude_commits: set[str] | None = None,
 ) -> RepoResult:
     errors: list[str] = []
 
@@ -440,6 +509,7 @@ def analyze_repo(
     me_monthly_tech_by_period_boot: dict[str, dict[str, dict[str, dict[str, int]]]] = {}
     excluded_by_period: dict[str, dict[str, int]] = {}
     bootstrap_commits_by_period: dict[str, list[dict[str, object]]] = {}
+    top_commits_by_period: dict[str, list[dict[str, object]]] = {}
 
     for period in periods:
         (
@@ -465,6 +535,7 @@ def analyze_repo(
             me_monthly_tech_boot_only,
             excluded,
             boot_commits,
+            top_commits,
             errs,
         ) = parse_numstat_stream(
             repo=repo,
@@ -475,6 +546,7 @@ def analyze_repo(
             exclude_path_prefixes=exclude_path_prefixes,
             exclude_path_globs=exclude_path_globs,
             bootstrap_exclude_shas=bootstrap_exclude_shas,
+            exclude_commits=exclude_commits,
         )
         period_stats_excl[period.label] = stats_excl_boot
         period_stats_boot[period.label] = stats_boot_only
@@ -498,6 +570,7 @@ def analyze_repo(
         me_monthly_tech_by_period_boot[period.label] = me_monthly_tech_boot_only
         excluded_by_period[period.label] = excluded
         bootstrap_commits_by_period[period.label] = boot_commits
+        top_commits_by_period[period.label] = top_commits
         errors.extend(errs)
 
     return RepoResult(
@@ -533,5 +606,6 @@ def analyze_repo(
         me_monthly_tech_by_period_bootstraps=me_monthly_tech_by_period_boot,
         excluded_by_period=excluded_by_period,
         bootstrap_commits_by_period=bootstrap_commits_by_period,
+        top_commits_by_period=top_commits_by_period,
         errors=errors,
     )

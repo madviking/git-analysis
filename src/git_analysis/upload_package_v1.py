@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import gzip
 import hashlib
 import json
@@ -7,8 +8,10 @@ import os
 import secrets
 import shutil
 import ssl
+import struct
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -42,6 +45,150 @@ def ensure_publisher_token(path: Path) -> str:
         except Exception:
             pass
     return token
+
+
+def ensure_publisher_ed25519_keypair(private_key_path: Path) -> str:
+    """
+    Ensure an unencrypted OpenSSH Ed25519 keypair exists at:
+      - private: `private_key_path`
+      - public:  `private_key_path + ".pub"`
+
+    Returns the public key line in `authorized_keys` format without comment:
+      `ssh-ed25519 <base64>`
+    """
+    if shutil.which("ssh-keygen") is None:
+        raise RuntimeError("ssh-keygen is required to generate publisher Ed25519 keys")
+
+    priv = Path(private_key_path).expanduser()
+    pub = Path(str(priv) + ".pub")
+    if priv.exists():
+        if not pub.exists():
+            pub.parent.mkdir(parents=True, exist_ok=True)
+            out = subprocess.run(
+                ["ssh-keygen", "-y", "-f", str(priv)],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            pub.write_text(out + "\n", encoding="utf-8")
+        return _normalize_ed25519_public_key_line(pub.read_text(encoding="utf-8", errors="replace"))
+
+    priv.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["ssh-keygen", "-t", "ed25519", "-N", "", "-f", str(priv), "-q"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    if not pub.exists():
+        raise RuntimeError(f"ssh-keygen did not create expected public key file: {pub}")
+    return _normalize_ed25519_public_key_line(pub.read_text(encoding="utf-8", errors="replace"))
+
+
+def _normalize_ed25519_public_key_line(s: str) -> str:
+    parts = (s or "").strip().split()
+    if len(parts) < 2:
+        raise RuntimeError("invalid ed25519 public key file (expected OpenSSH public key line)")
+    if parts[0] != "ssh-ed25519":
+        raise RuntimeError(f"invalid public key type (expected ssh-ed25519): {parts[0]!r}")
+    return f"{parts[0]} {parts[1]}"
+
+
+def sign_publisher_ed25519_message_base64(*, private_key_path: Path, message_to_sign: str) -> str:
+    """
+    Returns a standard-base64 Ed25519 signature over the exact UTF-8 bytes of `message_to_sign`.
+    """
+    if shutil.which("openssl") is None:
+        raise RuntimeError("openssl is required to sign GitHub verification challenges")
+    seed = _openssh_ed25519_seed_from_private_key(Path(private_key_path).expanduser())
+    pem = _ed25519_pkcs8_pem_from_seed(seed)
+    msg = (message_to_sign or "").encode("utf-8")
+    with tempfile.TemporaryDirectory(prefix="git-analysis-ed25519-") as td:
+        td_path = Path(td)
+        key_pem_path = td_path / "key.pem"
+        msg_path = td_path / "message.bin"
+        sig_path = td_path / "sig.bin"
+        key_pem_path.write_bytes(pem)
+        msg_path.write_bytes(msg)
+        subprocess.run(
+            ["openssl", "pkeyutl", "-sign", "-rawin", "-inkey", str(key_pem_path), "-in", str(msg_path), "-out", str(sig_path)],
+            check=True,
+            capture_output=True,
+        )
+        sig = sig_path.read_bytes()
+    if len(sig) != 64:
+        raise RuntimeError(f"unexpected Ed25519 signature length: {len(sig)}")
+    return base64.b64encode(sig).decode("ascii")
+
+
+def _ed25519_pkcs8_pem_from_seed(seed32: bytes) -> bytes:
+    if len(seed32) != 32:
+        raise ValueError("expected 32-byte Ed25519 seed")
+    # PrivateKeyInfo (RFC 8410) for Ed25519:
+    # 30 2e 02 01 00 30 05 06 03 2b 65 70 04 22 04 20 <seed>
+    der = b"\x30\x2e\x02\x01\x00\x30\x05\x06\x03\x2b\x65\x70\x04\x22\x04\x20" + seed32
+    b64 = base64.b64encode(der).decode("ascii")
+    lines = [b64[i : i + 64] for i in range(0, len(b64), 64)]
+    pem = "-----BEGIN PRIVATE KEY-----\n" + "\n".join(lines) + "\n-----END PRIVATE KEY-----\n"
+    return pem.encode("ascii")
+
+
+def _openssh_ed25519_seed_from_private_key(private_key_path: Path) -> bytes:
+    """
+    Extract the 32-byte Ed25519 seed from an unencrypted OpenSSH private key file.
+    """
+    raw = Path(private_key_path).read_text(encoding="utf-8", errors="replace")
+    lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+    try:
+        i0 = lines.index("-----BEGIN OPENSSH PRIVATE KEY-----")
+        i1 = lines.index("-----END OPENSSH PRIVATE KEY-----")
+    except ValueError as e:
+        raise RuntimeError("invalid OpenSSH private key file (missing header/footer)") from e
+    blob = base64.b64decode("".join(lines[i0 + 1 : i1]).encode("ascii"))
+    if not blob.startswith(b"openssh-key-v1\0"):
+        raise RuntimeError("invalid OpenSSH private key magic")
+    off = len(b"openssh-key-v1\0")
+
+    def read_u32(buf: bytes, o: int) -> tuple[int, int]:
+        if o + 4 > len(buf):
+            raise RuntimeError("truncated OpenSSH private key")
+        return struct.unpack(">I", buf[o : o + 4])[0], o + 4
+
+    def read_str(buf: bytes, o: int) -> tuple[bytes, int]:
+        n, o = read_u32(buf, o)
+        if o + n > len(buf):
+            raise RuntimeError("truncated OpenSSH private key")
+        return buf[o : o + n], o + n
+
+    ciphername_b, off = read_str(blob, off)
+    kdfname_b, off = read_str(blob, off)
+    _kdfopts_b, off = read_str(blob, off)
+    nkeys, off = read_u32(blob, off)
+    _pubkeys: list[bytes] = []
+    for _i in range(int(nkeys)):
+        pk, off = read_str(blob, off)
+        _pubkeys.append(pk)
+    priv_blob, off = read_str(blob, off)
+    _ = off
+
+    ciphername = ciphername_b.decode("utf-8", errors="replace")
+    kdfname = kdfname_b.decode("utf-8", errors="replace")
+    if ciphername != "none" or kdfname != "none":
+        raise RuntimeError("encrypted OpenSSH keys are not supported (expected ciphername/kdfname 'none')")
+
+    o2 = 0
+    _check1, o2 = read_u32(priv_blob, o2)
+    _check2, o2 = read_u32(priv_blob, o2)
+    ktype, o2 = read_str(priv_blob, o2)
+    if ktype != b"ssh-ed25519":
+        raise RuntimeError(f"unsupported OpenSSH key type: {ktype!r}")
+    pub, o2 = read_str(priv_blob, o2)
+    priv, o2 = read_str(priv_blob, o2)
+    if len(pub) != 32 or len(priv) != 64:
+        raise RuntimeError("invalid ed25519 key lengths in OpenSSH private key")
+    if priv[32:] != pub:
+        raise RuntimeError("ed25519 private key does not match public key")
+    return priv[:32]
 
 
 def _host_for_remote_canonical(remote_canonical: str) -> str:
@@ -124,12 +271,35 @@ def upload_package_v1(
             payload = e.read().decode("utf-8", errors="replace")
         except Exception:
             payload = ""
+        if _is_duplicate_payload_error(code=int(getattr(e, "code", 0) or 0), payload=payload):
+            return
         raise RuntimeError(f"upload failed: HTTP {e.code}: {payload[:500]}") from e
     except urllib.error.URLError as e:
         msg = f"upload failed: {e}"
         if _is_cert_verify_error(e):
             msg = msg + "\n" + _cert_verify_hint(ca_bundle_path=ca_bundle_path)
         raise RuntimeError(msg) from e
+
+
+def _is_duplicate_payload_error(*, code: int, payload: str) -> bool:
+    if int(code or 0) != 409:
+        return False
+    s = (payload or "").strip()
+    if not s:
+        return False
+    try:
+        obj = json.loads(s)
+    except Exception:
+        obj = None
+    if isinstance(obj, dict):
+        err = str(obj.get("error", "") or "").strip().lower()
+        msg = str(obj.get("message", "") or "").strip().lower()
+        if err == "duplicate":
+            return True
+        if "duplicate payload" in msg:
+            return True
+    sl = s.lower()
+    return "duplicate payload" in sl
 
 
 def _display_name_url_from_api_url(api_url: str) -> str:
@@ -194,6 +364,153 @@ def update_display_name_v1(
         raise RuntimeError(f"display-name update failed: HTTP {e.code}: {payload_s[:500]}") from e
     except urllib.error.URLError as e:
         msg = f"display-name update failed: {e}"
+        if _is_cert_verify_error(e):
+            msg = msg + "\n" + _cert_verify_hint(ca_bundle_path=ca_bundle_path)
+        raise RuntimeError(msg) from e
+
+
+def _github_verify_challenge_url_from_api_url(api_url: str) -> str:
+    u = (api_url or "").strip().rstrip("/")
+    if not u:
+        return ""
+    suffix = "/api/v1/me/github/verify/challenge"
+    if u.endswith(suffix):
+        return u
+    if u.endswith("/api/v1/uploads"):
+        u = u[: -len("/api/v1/uploads")].rstrip("/")
+    return u + suffix
+
+
+def _github_verify_confirm_url_from_api_url(api_url: str) -> str:
+    u = (api_url or "").strip().rstrip("/")
+    if not u:
+        return ""
+    suffix = "/api/v1/me/github/verify/confirm"
+    if u.endswith(suffix):
+        return u
+    if u.endswith("/api/v1/uploads"):
+        u = u[: -len("/api/v1/uploads")].rstrip("/")
+    return u + suffix
+
+
+def github_verify_challenge_v1(
+    *,
+    api_url: str,
+    publisher_token: str,
+    github_username: str,
+    timeout_s: int = 30,
+    ca_bundle_path: str = "",
+) -> dict[str, object]:
+    if not publisher_token.strip():
+        raise ValueError("publisher_token is required")
+    username = (github_username or "").strip()
+    if not username:
+        raise ValueError("github_username is required")
+
+    url = _github_verify_challenge_url_from_api_url(api_url)
+    if not url:
+        raise ValueError("api_url is required")
+
+    payload = json.dumps({"github_username": username}, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        method="POST",
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "X-Publisher-Token": publisher_token,
+        },
+    )
+    ctx = _ssl_context(ca_bundle_path=ca_bundle_path)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s, context=ctx) as resp:
+            code = int(getattr(resp, "status", 0) or 0)
+            body = resp.read().decode("utf-8", errors="replace")
+            if 200 <= code < 300:
+                try:
+                    obj = json.loads(body) if body else {}
+                except Exception:
+                    obj = {}
+                return obj if isinstance(obj, dict) else {}
+            raise RuntimeError(f"github-verify challenge failed: HTTP {code}: {body[:500]}")
+    except urllib.error.HTTPError as e:
+        payload_s = ""
+        try:
+            payload_s = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            payload_s = ""
+        raise RuntimeError(f"github-verify challenge failed: HTTP {e.code}: {payload_s[:500]}") from e
+    except urllib.error.URLError as e:
+        msg = f"github-verify challenge failed: {e}"
+        if _is_cert_verify_error(e):
+            msg = msg + "\n" + _cert_verify_hint(ca_bundle_path=ca_bundle_path)
+        raise RuntimeError(msg) from e
+
+
+def github_verify_confirm_v1(
+    *,
+    api_url: str,
+    publisher_token: str,
+    github_username: str,
+    challenge: str,
+    signature: str,
+    timeout_s: int = 30,
+    ca_bundle_path: str = "",
+) -> dict[str, object]:
+    if not publisher_token.strip():
+        raise ValueError("publisher_token is required")
+    username = (github_username or "").strip()
+    if not username:
+        raise ValueError("github_username is required")
+    ch = (challenge or "").strip()
+    if not ch:
+        raise ValueError("challenge is required")
+    sig = (signature or "").strip()
+    if not sig:
+        raise ValueError("signature is required")
+
+    url = _github_verify_confirm_url_from_api_url(api_url)
+    if not url:
+        raise ValueError("api_url is required")
+
+    payload = (
+        json.dumps(
+            {"github_username": username, "challenge": ch, "signature": sig},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    )
+    req = urllib.request.Request(
+        url,
+        method="POST",
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "X-Publisher-Token": publisher_token,
+        },
+    )
+    ctx = _ssl_context(ca_bundle_path=ca_bundle_path)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s, context=ctx) as resp:
+            code = int(getattr(resp, "status", 0) or 0)
+            body = resp.read().decode("utf-8", errors="replace")
+            if 200 <= code < 300:
+                try:
+                    obj = json.loads(body) if body else {}
+                except Exception:
+                    obj = {}
+                return obj if isinstance(obj, dict) else {}
+            raise RuntimeError(f"github-verify confirm failed: HTTP {code}: {body[:500]}")
+    except urllib.error.HTTPError as e:
+        payload_s = ""
+        try:
+            payload_s = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            payload_s = ""
+        raise RuntimeError(f"github-verify confirm failed: HTTP {e.code}: {payload_s[:500]}") from e
+    except urllib.error.URLError as e:
+        msg = f"github-verify confirm failed: {e}"
         if _is_cert_verify_error(e):
             msg = msg + "\n" + _cert_verify_hint(ca_bundle_path=ca_bundle_path)
         raise RuntimeError(msg) from e

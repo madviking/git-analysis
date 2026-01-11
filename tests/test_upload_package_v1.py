@@ -128,6 +128,71 @@ def test_upload_raises_on_non_2xx(tmp_path: Path) -> None:
     server.shutdown()
 
 
+def test_upload_409_duplicate_is_treated_as_success(tmp_path: Path) -> None:
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            body = json.dumps({"error": "duplicate", "message": "duplicate payload for publisher"}).encode("utf-8")
+            self.send_response(409)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, fmt: str, *args: object) -> None:
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+
+    token = ensure_publisher_token(tmp_path / "publisher_token")
+    raw = canonical_json_bytes({"ok": True})
+    sha = hashlib.sha256(raw).hexdigest()
+
+    upload_package_v1(
+        upload_url=f"http://127.0.0.1:{server.server_port}/api/v1/uploads",
+        publisher_token=token,
+        payload_bytes=raw,
+        payload_sha256=sha,
+        timeout_s=5,
+    )
+
+    server.shutdown()
+
+
+def test_upload_409_non_duplicate_still_raises(tmp_path: Path) -> None:
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            body = json.dumps({"error": "conflict", "message": "something else"}).encode("utf-8")
+            self.send_response(409)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, fmt: str, *args: object) -> None:
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+
+    token = ensure_publisher_token(tmp_path / "publisher_token")
+    raw = canonical_json_bytes({"ok": True})
+    sha = hashlib.sha256(raw).hexdigest()
+
+    with pytest.raises(RuntimeError):
+        upload_package_v1(
+            upload_url=f"http://127.0.0.1:{server.server_port}/api/v1/uploads",
+            publisher_token=token,
+            payload_bytes=raw,
+            payload_sha256=sha,
+            timeout_s=5,
+        )
+
+    server.shutdown()
+
+
 def _make_https_server_with_ca(tmp_path: Path, handler_cls: type[BaseHTTPRequestHandler]) -> tuple[HTTPServer, Path]:
     if shutil.which("openssl") is None:
         pytest.skip("openssl is required for HTTPS upload tests")

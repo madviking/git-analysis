@@ -128,6 +128,7 @@ def run_analysis(*, args: argparse.Namespace, periods: list[Period]) -> int:
         addition_ratio=float(config.get("bootstrap_addition_ratio", 0.90)),
     )
     bootstrap_exclude_shas = {str(s).strip() for s in (config.get("bootstrap_exclude_shas") or []) if str(s).strip()}
+    exclude_commits = {str(s).strip() for s in (config.get("exclude_commits") or []) if str(s).strip()}
     include_bootstraps = bool(args.include_bootstraps)
 
     scan_root = args.root.resolve()
@@ -204,6 +205,7 @@ def run_analysis(*, args: argparse.Namespace, periods: list[Period]) -> int:
                     exclude_path_prefixes,
                     exclude_path_globs,
                     bootstrap_exclude_shas,
+                    exclude_commits,
                 )
             )
 
@@ -272,6 +274,7 @@ def run_analysis(*, args: argparse.Namespace, periods: list[Period]) -> int:
                             exclude_path_prefixes,
                             exclude_path_globs,
                             bootstrap_exclude_shas,
+                            exclude_commits,
                         )
                     )
                 for fut in as_completed(futs2):

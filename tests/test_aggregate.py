@@ -39,6 +39,7 @@ def test_repo_period_stats_include_bootstraps() -> None:
         me_monthly_tech_by_period_bootstraps={},
         excluded_by_period={},
         bootstrap_commits_by_period={},
+        top_commits_by_period={},
         errors=[],
     )
 

@@ -54,6 +54,9 @@ Publishing is what enables public stats pages (LLM tools proficiency summary, le
 Server destination is configured in `config.json` under `upload_config.api_url` (or override with `--upload-url`).
 
 Uploads contain only your own (“me”) stats (not aggregate totals across all authors), contain no repo identifiers/URLs, and are always sent as full calendar years; you’ll be prompted for which years to include (2025 is always included).
+Each API request is printed before it’s sent (URL + payload file path for uploads, or inline JSON for small requests like display-name updates).
+The publisher token is a random local secret stored in a file (not derived from SSH keys); the CLI prints an explanation when creating/using it.
+Uploads also include a publisher Ed25519 public key (`publisher.public_key`) generated and stored locally alongside the token; it can be used for GitHub username verification without OAuth (`./cli.sh github-verify`).
 You can update your public display name later via `./cli.sh display-name --name "New Name"` or reset it to a pseudonym via `./cli.sh display-name --pseudonym`.
 
 ## Development
@@ -101,12 +104,13 @@ These affect **line counts** and **language breakdowns**.
 
 ### Bootstraps / imports (recommended)
 
-Large “bootstrap/import” commits (e.g. scaffolding a new framework project, or deleting a large generated directory) can dominate year-over-year totals. The analyzer can detect these commits by their shape (huge churn, many files, mostly one-sided) and exclude them from the main stats by default.
+Large “bootstrap/import” commits (e.g. scaffolding a new framework project, or deleting a large generated directory) can dominate year-over-year totals. The analyzer can detect these commits by their shape (huge churn, many files, mostly one-sided) and exclude them from the main stats by default. Extremely large outliers (very large one-sided commits, or very large multi-file sweeps) are also treated as bootstraps.
 
 Config:
 - `bootstrap_changed_threshold`: minimum changed lines to be considered a bootstrap (default `50000`)
 - `bootstrap_files_threshold`: minimum files touched to be considered a bootstrap (default `200`)
 - `bootstrap_addition_ratio`: minimum `max(insertions,deletions)/(insertions+deletions)` (default `0.9`)
+- `exclude_commits`: list of commit SHAs to exclude entirely from stats
 
 CLI:
 - `--include-bootstraps`: include detected bootstrap commits in the main stats (they are always reported separately too).
@@ -143,7 +147,7 @@ Within a run directory:
 - Root: `year_in_review_<YYYY>.txt` / `period_in_review_<period>.txt`, `year_in_review_<YYYY0>_vs_<YYYY1>.txt` / `period_in_review_<p0>_vs_<p1>.txt`, `comparison_<p0>_vs_<p1>.txt`, `llm_inflection_stats.txt` (when configured)
 - `markup/`: `year_in_review_*.md`, `period_in_review_*.md`, `comparison_<p0>_vs_<p1>.md`, `llm_inflection_stats.md` (when configured)
 - `json/`: `year_<period>_summary.json`, `year_<period>_excluded.json`, `run_meta.json`
-- `csv/`: `year_<period>_repos.csv`, `year_<period>_authors.csv`, `year_<period>_languages.csv`, `year_<period>_dirs.csv`, `year_<period>_bootstraps_*.csv`, `repo_activity.csv`
+- `csv/`: `year_<period>_repos.csv`, `year_<period>_authors.csv`, `year_<period>_languages.csv`, `year_<period>_dirs.csv`, `year_<period>_bootstraps_*.csv`, `repo_activity.csv`, `top_commits.csv`
 - `timeseries/`: `year_<period>_weekly.json`, plus (when `--detailed`) `year_<period>_me_timeseries.json` and `me_timeseries.json`
 - `debug/`: `repo_selection.csv`, `repo_selection_summary.json`
 

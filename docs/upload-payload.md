@@ -19,6 +19,7 @@ The payload is:
 - `publisher` (object):
   - `kind` (string): `"pseudonym"` | `"user_provided"`
   - `value` (string): pseudonym or user-provided identity
+  - `public_key` (string): OpenSSH Ed25519 public key line (`ssh-ed25519 <base64>`)
 - `periods` (array): uploaded periods (always year periods)
   - each: `{ "label": "2025", "start": "2025-01-01", "end": "2026-01-01" }`
 - `llm_coding` (object, optional): user-provided metadata from the wizard

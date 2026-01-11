@@ -34,6 +34,11 @@ Used to detect very large one-sided bulk commits (imports or mass deletions):
 - `bootstrap_addition_ratio` (minimum `max(insertions,deletions)/(insertions+deletions)`)
 - `bootstrap_exclude_shas`: list of commit SHAs to force-treat as non-bootstrap (even if they match thresholds)
 
+Note: extremely large outliers (very large one-sided commits, or very large multi-file sweeps) are also treated as bootstraps.
+
+## Excluding specific commits
+- `exclude_commits`: list of commit SHAs to exclude entirely from stats (and from `csv/top_commits.csv`)
+
 ## Publishing defaults
 Publishing uses an interactive wizard. The wizard persists defaults under:
 
@@ -52,7 +57,8 @@ Publishing uses an interactive wizard. The wizard persists defaults under:
       "primary_tool_current": "none"
     },
     "display_name": "",
-    "publisher_token_path": "~/.config/git-analysis/publisher_token"
+    "publisher_token_path": "~/.config/git-analysis/publisher_token",
+    "publisher_key_path": "~/.config/git-analysis/publisher_ed25519"
   }
 }
 ```
@@ -62,6 +68,7 @@ Notes:
 - The full publish setup wizard runs only when `upload_config` is not yet configured; afterwards you can edit `config.json` directly to change `upload_config.*`.
 - `display_name` is a user preference for your public profile name; it can be updated at any time via `./cli.sh display-name`.
 - `publisher_token_path` is a local secret used for replace semantics; keep it private.
+- `publisher_key_path` is your publisher Ed25519 keypair path (OpenSSH private key; public key is stored at `publisher_key_path + ".pub"`). The **public** key is included in uploads and can be used for GitHub username verification (`./cli.sh github-verify`, requires `openssl`).
 - `upload_years` controls which full years are included in uploads; uploads always include 2025 even if not listed.
 
 ## Upload server URL

@@ -261,6 +261,74 @@ def write_bootstrap_commits_csv(path: Path, repos: list[RepoResult], period_labe
             )
 
 
+def write_top_commits_csv(path: Path, repos: list[RepoResult], period_labels: list[str], *, limit: int = 50) -> None:
+    wanted = list(dict.fromkeys([str(p) for p in (period_labels or []) if str(p).strip()]))
+    rows: list[dict[str, object]] = []
+    for label in wanted:
+        for r in repos:
+            for c in r.top_commits_by_period.get(label, []):
+                row = dict(c)
+                row["period"] = label
+                row["repo_path"] = r.path
+                row["repo_key"] = r.key
+                row["remote_canonical"] = r.remote_canonical
+                row["remote_name"] = r.remote_name
+                row["remote_origin"] = r.remote
+                rows.append(row)
+
+    rows.sort(
+        key=lambda d: (
+            -int(d.get("changed", 0)),
+            str(d.get("repo_key", "")),
+            str(d.get("sha", "")),
+        )
+    )
+    if limit > 0:
+        rows = rows[:limit]
+
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(
+            [
+                "period",
+                "repo_key",
+                "repo_path",
+                "remote_canonical",
+                "sha",
+                "commit_iso",
+                "author_name",
+                "author_email",
+                "is_me",
+                "is_bootstrap",
+                "files_touched",
+                "insertions",
+                "deletions",
+                "changed",
+                "subject",
+            ]
+        )
+        for r in rows:
+            writer.writerow(
+                [
+                    r.get("period", ""),
+                    r.get("repo_key", ""),
+                    r.get("repo_path", ""),
+                    r.get("remote_canonical", ""),
+                    r.get("sha", ""),
+                    r.get("commit_iso", ""),
+                    r.get("author_name", ""),
+                    r.get("author_email", ""),
+                    str(bool(r.get("is_me", False))),
+                    str(bool(r.get("is_bootstrap", False))),
+                    int(r.get("files_touched", 0)),
+                    int(r.get("insertions", 0)),
+                    int(r.get("deletions", 0)),
+                    int(r.get("changed", 0)),
+                    r.get("subject", ""),
+                ]
+            )
+
+
 def write_repo_activity_csv(path: Path, repos: list[RepoResult], period_labels: list[str]) -> None:
     seen: set[str] = set()
     labels: list[str] = []
@@ -300,4 +368,3 @@ def write_repo_activity_csv(path: Path, repos: list[RepoResult], period_labels: 
                     ]
                 )
             writer.writerow(row)
-

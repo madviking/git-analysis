@@ -44,7 +44,7 @@ def test_bootstrap_detection_flags_deletion_dominant_commits(tmp_path: Path) -> 
     _commit_all(repo=repo, msg="remove generated html", author_date="2025-02-10T12:00:00Z")
 
     period = Period(label="2025", start=dt.date(2025, 1, 1), end=dt.date(2026, 1, 1))
-    stats_excl, stats_boot, *_rest, boot_commits, errors = parse_numstat_stream(
+    stats_excl, stats_boot, *_rest, boot_commits, _top_commits, errors = parse_numstat_stream(
         repo=repo,
         period=period,
         include_merges=False,

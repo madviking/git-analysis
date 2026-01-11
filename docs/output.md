@@ -36,6 +36,7 @@ Within a run directory:
 - `year_<period>_bootstraps_languages.csv`
 - `year_<period>_bootstraps_dirs.csv`
 - `repo_activity.csv`
+- `top_commits.csv` (top 50 commits by churn across all analyzed repos/periods)
 
 ## `timeseries/`
 - `year_<period>_weekly.json` (weekly totals, required)

@@ -44,7 +44,7 @@ def test_bootstrap_exclude_sha_forces_non_bootstrap(tmp_path: Path, monkeypatch)
     me = MeMatcher(frozenset(), frozenset())
     bootstrap = BootstrapConfig(changed_threshold=1, files_threshold=1, addition_ratio=0.0)
 
-    stats_excl, stats_boot, *_rest, boot_commits, errors = parse_numstat_stream(
+    stats_excl, stats_boot, *_rest, boot_commits, _top_commits, errors = parse_numstat_stream(
         repo=repo_dir,
         period=period,
         include_merges=False,

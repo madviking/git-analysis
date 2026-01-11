@@ -9,12 +9,15 @@ The first time you publish (or if `upload_config` is missing), the wizard collec
 4) LLM coding inflection points (start date, “>90% by LLM” date)
 5) Primary LLM coding tool (initial + current) from a fixed list
 
+It also ensures a local publisher Ed25519 keypair exists (saved under `upload_config.publisher_key_path`), and includes the public key in uploads.
+
 Once `upload_config` is set up, the wizard does not re-prompt for these values; update them by editing `config.json` under `upload_config.*`.
 
 If publishing is enabled, the tool will later:
 1) Print an upload preview summary (and save the payload to disk)
 2) Print the payload SHA-256 (canonical JSON bytes)
-3) Prompt for final confirmation before upload
+3) Print each API request URL and payload reference (upload payload is shown as a file path; small JSON payloads are printed inline)
+4) Prompt for final confirmation before upload
  
 Uploads contain only your own (“me”) stats (not aggregate stats across all authors) and contain no repo identifiers/URLs.
 
@@ -36,6 +39,17 @@ The client sends a stable `publisher_token` (a local secret) in the `X-Publisher
 
 Default location: `~/.config/git-analysis/publisher_token` (override in the wizard or via `config.json`).
 
+The publisher token is a random secret generated locally (it is not derived from your SSH keys, GitHub credentials, or any other private keys). If the configured token file doesn’t exist, the CLI creates it and prints an explanation before making any API calls.
+
+## Publisher key / GitHub verification
+Each publisher also has a local Ed25519 keypair (OpenSSH format) used for lightweight GitHub username verification **without OAuth**.
+
+- Config: `upload_config.publisher_key_path` (default `~/.config/git-analysis/publisher_ed25519`)
+  - Public key is stored at `publisher_key_path + ".pub"` and is included in every upload payload as `publisher.public_key`.
+- Verify a GitHub username (optional): `./cli.sh github-verify --username <name>`
+  - You must add the public key to GitHub → Settings → SSH and GPG keys.
+  - Requires `ssh-keygen` (key generation) and `openssl` (Ed25519 signing) on PATH.
+
 ## Server destination
 The server base URL is configured in `config.json` under `upload_config.api_url` (or overridden via `--upload-url`).
 If your server uses HTTPS, the client verifies certificates using a discovered CA trust store; for private CAs, set `upload_config.ca_bundle_path` or pass `--ca-bundle`.
@@ -47,6 +61,8 @@ Uploads are sent as:
   - `Content-Encoding: gzip`
   - `X-Publisher-Token: <secret>`
   - `X-Payload-SHA256: <sha256 of uncompressed canonical JSON bytes>`
+
+If the server responds with `HTTP 409` and a `{"error":"duplicate"}` payload, the client treats it as a successful no-op (the payload was already uploaded for this publisher).
 
 ## Saved defaults
 Wizard answers are persisted to `config.json` under `upload_config.*` and reused as defaults in future prompts.
