@@ -38,6 +38,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default="",
         help="Override `upload_config.api_url` (or provide full /api/v1/uploads URL).",
     )
+    parser.add_argument(
+        "--ca-bundle",
+        type=str,
+        default="",
+        help="Path to a CA bundle file/dir for HTTPS verification (overrides `upload_config.ca_bundle_path`).",
+    )
     parser.add_argument("--publisher", type=str, default="", help="Public identity string (optional; not verified).")
     parser.add_argument("--publisher-token-path", type=Path, default=None, help="Path to persist the local publisher token.")
     return parser

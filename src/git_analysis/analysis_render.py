@@ -115,7 +115,7 @@ def render_year_in_review(
     )
     lines.append(
         f"Bootstraps: {'included' if include_bootstraps else 'excluded'} "
-        f"(thresholds: changed>={fmt_int(bootstrap_cfg.changed_threshold)}, files>={fmt_int(bootstrap_cfg.files_threshold)}, add_ratio>={bootstrap_cfg.addition_ratio:.2f})"
+        f"(thresholds: changed>={fmt_int(bootstrap_cfg.changed_threshold)}, files>={fmt_int(bootstrap_cfg.files_threshold)}, dominance>={bootstrap_cfg.addition_ratio:.2f})"
     )
     if include_remote_prefixes:
         lines.append(f"Remote filter: {', '.join(include_remote_prefixes)}")

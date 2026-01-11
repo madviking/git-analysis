@@ -113,7 +113,7 @@ Work items:
 At run start, prompt:
 1) “Publish results to the public site?” (yes/no)
 2) Which full years to include in upload (calendar years; 2025 is always included)
-3) Display identity (public): pseudonym (default) or user-provided string (not verified)
+3) Display identity (public): pseudonym (default), GitHub username (flagged as `verified`), or custom string (not verified)
 
 Work items:
 - [x] Add interactive prompts (and non-interactive overrides for automation).

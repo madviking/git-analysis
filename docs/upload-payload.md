@@ -17,8 +17,9 @@ The payload is:
 - `data_scope` (string): `"me"`
 - `repos_total` (int): number of repos analyzed in this run (after filtering/dedupe)
 - `publisher` (object):
-  - `kind` (string): `"pseudonym"` | `"user_provided"`
+  - `kind` (string): `"pseudonym"` | `"github_username"` | `"user_provided"`
   - `value` (string): pseudonym or user-provided identity
+  - `verified` (bool): whether this identity was collected as a GitHub username in the wizard (`true` only for `kind="github_username"`)
 - `periods` (array): uploaded periods (always year periods)
   - each: `{ "label": "2025", "start": "2025-01-01", "end": "2026-01-01" }`
 - `llm_coding` (object, optional): user-provided metadata from the wizard
@@ -64,4 +65,3 @@ Each weekly row:
 - `repos_new` (int): number of repos whose first historical commit falls in this week
 - `technologies` (array): per-language breakdown for this week (optional empty)
   - each: `{ "technology": "Python", "commits": 1, "insertions": 10, "deletions": 3, "changed": 13 }`
-

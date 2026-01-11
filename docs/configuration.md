@@ -28,10 +28,10 @@ These only affect line/language totals (not discovery):
 - `exclude_path_globs`: glob-based skips
 
 ## Bootstraps/imports
-Used to detect very large initial imports:
+Used to detect very large one-sided bulk commits (imports or mass deletions):
 - `bootstrap_changed_threshold`
 - `bootstrap_files_threshold`
-- `bootstrap_addition_ratio`
+- `bootstrap_addition_ratio` (minimum `max(insertions,deletions)/(insertions+deletions)`)
 - `bootstrap_exclude_shas`: list of commit SHAs to force-treat as non-bootstrap (even if they match thresholds)
 
 ## Publishing defaults
@@ -42,6 +42,7 @@ Publishing uses an interactive wizard. The wizard persists defaults under:
   "upload_config": {
     "automatic_upload": "confirm",
     "api_url": "",
+    "ca_bundle_path": "",
     "default_publish": false,
     "upload_years": [2024, 2025],
     "llm_coding": {
@@ -51,6 +52,7 @@ Publishing uses an interactive wizard. The wizard persists defaults under:
       "primary_tool_current": "none"
     },
     "publisher": "",
+    "publisher_identity": { "kind": "pseudonym", "value": "", "verified": false },
     "publisher_token_path": "~/.config/git-analysis/publisher_token"
   }
 }
@@ -59,11 +61,22 @@ Publishing uses an interactive wizard. The wizard persists defaults under:
 Notes:
 - `default_publish` only controls the default shown in the prompt; the user is still prompted every run.
 - The full publish setup wizard runs only when `upload_config` is not yet configured; afterwards you can edit `config.json` directly to change `upload_config.*`.
-- `publisher` is not verified (no OAuth).
-- If `publisher` is blank, the public identity is a derived pseudonym.
+- `publisher_identity` controls the public identity:
+  - `kind="pseudonym"`: public identity is derived from `publisher_token` (no `value` required).
+  - `kind="github_username"`: `value` is a GitHub username and the payload marks `publisher.verified=true`.
+  - `kind="user_provided"`: `value` is an arbitrary custom string (not verified).
 - `publisher_token_path` is a local secret used for replace semantics; keep it private.
 - `upload_years` controls which full years are included in uploads; uploads always include 2025 even if not listed.
 
 ## Upload server URL
 The upload destination is stored in `config.json` under `upload_config.api_url`.
 The client POSTs to `upload_config.api_url + "/api/v1/uploads"` (unless `--upload-url` is provided).
+
+## HTTPS CA bundle (TLS verification)
+If your upload server uses HTTPS and you see `CERTIFICATE_VERIFY_FAILED`, the client could not find a usable CA trust store.
+
+The tool will try to discover a CA bundle automatically (including generating one from the macOS system Keychain when needed), so this should not normally require manual setup.
+
+Options:
+- Set `upload_config.ca_bundle_path` to a CA bundle file (or directory) to use for HTTPS verification.
+- Or pass `--ca-bundle /path/to/ca.pem` for a one-off override.

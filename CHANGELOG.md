@@ -8,8 +8,10 @@ The format is based on Keep a Changelog, and this project follows SemVer where a
 
 ### Fixed
 - Prevent `git log` deadlocks by draining stderr while streaming stdout (fixes analysis runs hanging near completion).
+- Bootstrap detection now also excludes deletion-dominant bulk commits (e.g. removing a large generated directory) when they meet the configured thresholds.
 - Graceful upload failures: HTTP errors no longer show Python tracebacks; payload path and retry hint are printed instead.
 - Upload preview no longer prints the full JSON payload; it prints a summary and a file path, then prompts for confirmation.
+- HTTPS uploads now auto-discover a CA trust store (including a macOS Keychain-derived cache when needed); private CAs can be supplied via `upload_config.ca_bundle_path` / `--ca-bundle`.
 
 ### Added
 - Auto-bootstrap config creation from `config-template.json` when `--config` is missing, with inferred identity and scanned repo remote prefixes, then prompt to review/edit before continuing.
@@ -18,6 +20,8 @@ The format is based on Keep a Changelog, and this project follows SemVer where a
 - Startup ASCII header describing what the run will do and where outputs are written.
 - `llm_inflection_stats` comparison report based on `upload_config.llm_coding.dominant_at`.
 - Weekly time series now includes per-week technology (language) breakdowns (`technologies` per week).
+- Publish wizard support for GitHub usernames as the public identity (`upload_config.publisher_identity`, flagged via `publisher.verified=true` in uploads).
+- Document `.venv/` usage for contributors/agents in `AGENTS.md`.
 
 ### Changed
 - Upload/publish defaults now persist under `config.json` → `upload_config.*` (backward-compatible read of legacy `publish` block remains).

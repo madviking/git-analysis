@@ -16,3 +16,7 @@
 - Install dev deps: `uv sync --group dev`
 - Run tests: `.venv/bin/python -m pytest`
 
+## Virtualenv (`.venv`)
+- This repo uses a project-local virtualenv at `.venv/` (created/managed via `uv`).
+- Use `.venv/bin/python` (and `.venv/bin/pytest`, if needed) to avoid ambiguity with system Python.
+- If `.venv/` is missing or stale, recreate it with `uv sync --group dev` (then re-run tests with `.venv/bin/python -m pytest`).

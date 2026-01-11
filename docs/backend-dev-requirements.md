@@ -49,6 +49,7 @@ The publish wizard persists defaults in `config.json` under `upload_config.*` (p
 - `upload_config.default_publish`
 - `upload_config.upload_years` (calendar years to upload; 2025 is always included)
 - `upload_config.publisher`
+- `upload_config.publisher_identity`
 - `upload_config.publisher_token_path`
 - `upload_config.api_url` (server base URL)
 - `upload_config.automatic_upload` (`confirm` | `always` | `never`, with tolerant parsing of yes/no-like values)

@@ -65,7 +65,14 @@ def run_analysis(*, args: argparse.Namespace, periods: list[Period]) -> int:
 
     if upload_block_reasons:
         print("Note: publishing disabled for this run (unsupported flags: " + ", ".join(upload_block_reasons) + ").")
-        publish_inputs = PublishInputs(publish=False, publisher="", publisher_token_path=default_publisher_token_path(), upload_years=[])
+        publish_inputs = PublishInputs(
+            publish=False,
+            publisher_kind="pseudonym",
+            publisher_value="",
+            publisher_verified=False,
+            publisher_token_path=default_publisher_token_path(),
+            upload_years=[],
+        )
     else:
         publish_inputs = collect_publish_inputs(args=args, config_path=args.config, config=config, report_periods=periods)
     me_emails_cfg = list(config.get("me_emails", []) or [])

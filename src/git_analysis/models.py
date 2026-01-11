@@ -85,5 +85,8 @@ class BootstrapConfig:
             return False
         if changed <= 0:
             return False
-        ratio = insertions / changed
+        # "Bootstraps" are bulk-churn commits that dominate a period:
+        # typically mostly insertions (project scaffolding/import), but sometimes mostly deletions (large cleanup).
+        dominant = max(insertions, deletions)
+        ratio = dominant / changed
         return ratio >= self.addition_ratio

@@ -14,6 +14,7 @@
   "upload_config": {
     "automatic_upload": "confirm",
     "api_url": "http://localhost:3220",
+    "ca_bundle_path": "",
     "default_publish": false,
     "upload_years": [
       2024,
@@ -26,6 +27,11 @@
       "primary_tool_current": "none"
     },
     "publisher": "",
+    "publisher_identity": {
+      "kind": "pseudonym",
+      "value": "",
+      "verified": false
+    },
     "publisher_token_path": "~/.config/git-analysis/publisher_token"
   },
   "excluded_repos": [

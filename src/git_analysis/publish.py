@@ -12,6 +12,7 @@ from .analysis_aggregate import aggregate_weekly_me, aggregate_weekly_me_tech
 from .analysis_render import fmt_int
 from .analysis_periods import Period
 from .config import load_config, save_config
+from .identity import normalize_github_username
 from .models import RepoResult
 from .upload_package_v1 import canonical_json_bytes, ensure_publisher_token, upload_package_v1
 
@@ -222,9 +223,98 @@ def _upload_url_from_api_url(api_url: str) -> str:
 @dataclasses.dataclass(frozen=True)
 class PublishInputs:
     publish: bool
-    publisher: str
+    publisher_kind: str
+    publisher_value: str
+    publisher_verified: bool
     publisher_token_path: Path
     upload_years: list[int]
+
+
+_VALID_PUBLISHER_KINDS: frozenset[str] = frozenset({"pseudonym", "github_username", "user_provided"})
+
+
+def _is_valid_github_username(username: str) -> bool:
+    s = normalize_github_username(username)
+    if not s:
+        return False
+    if len(s) > 39:
+        return False
+    if not s[0].isalnum() or not s[-1].isalnum():
+        return False
+    for ch in s:
+        if ch.isalnum() or ch == "-":
+            continue
+        return False
+    return True
+
+
+def _publisher_identity_from_upload_cfg(upload_cfg: dict[str, object]) -> tuple[str, str, bool]:
+    pid = upload_cfg.get("publisher_identity")
+    if isinstance(pid, dict):
+        kind = str(pid.get("kind", "") or "").strip()
+        value = str(pid.get("value", "") or "").strip()
+        verified = bool(pid.get("verified", False))
+        if kind in _VALID_PUBLISHER_KINDS:
+            if kind == "pseudonym":
+                return "pseudonym", "", False
+            if kind == "github_username":
+                return "github_username", normalize_github_username(value), bool(verified)
+            return "user_provided", value, bool(verified)
+
+    publisher = str(upload_cfg.get("publisher", "") or "").strip()
+    if publisher:
+        return "user_provided", publisher, False
+    return "pseudonym", "", False
+
+
+def _persist_publisher_identity(upload_cfg: dict[str, object], *, kind: str, value: str, verified: bool) -> None:
+    k = (kind or "").strip()
+    if k not in _VALID_PUBLISHER_KINDS:
+        k = "pseudonym"
+    v = (value or "").strip()
+    if k == "github_username":
+        v = normalize_github_username(v)
+    if k == "pseudonym":
+        v = ""
+        verified = False
+
+    upload_cfg["publisher_identity"] = {"kind": k, "value": v, "verified": bool(verified)}
+    upload_cfg["publisher"] = v
+
+
+def _prompt_publisher_identity(*, upload_cfg: dict[str, object], config: dict[str, object]) -> tuple[str, str, bool]:
+    existing_kind, existing_value, _existing_verified = _publisher_identity_from_upload_cfg(upload_cfg)
+    if existing_kind == "github_username":
+        mode_default = "github"
+    elif existing_kind == "user_provided":
+        mode_default = "custom"
+    else:
+        mode_default = "pseudonym"
+
+    mode = _prompt_choice("Public identity mode", choices=("pseudonym", "github", "custom"), default=mode_default)
+
+    if mode == "pseudonym":
+        return "pseudonym", "", False
+
+    if mode == "github":
+        me_gh = config.get("me_github_usernames")
+        default_gh = ""
+        if isinstance(me_gh, list) and me_gh:
+            default_gh = str(me_gh[0] or "").strip()
+        if not default_gh:
+            default_gh = existing_value if existing_kind == "github_username" else ""
+        for _attempt in range(3):
+            ans = _prompt_str("GitHub username (public)", default=default_gh).strip()
+            if _is_valid_github_username(ans):
+                return "github_username", normalize_github_username(ans), True
+            print("Invalid GitHub username; try again.")
+        return "pseudonym", "", False
+
+    publisher_default = existing_value if existing_kind == "user_provided" else str(upload_cfg.get("publisher", "") or "").strip()
+    publisher = _prompt_str("Public identity (custom; not verified, blank for pseudonym)", default=publisher_default).strip()
+    if not publisher:
+        return "pseudonym", "", False
+    return "user_provided", publisher, False
 
 
 def _load_upload_cfg(config_path: Path) -> dict[str, object]:
@@ -327,7 +417,14 @@ def collect_publish_inputs(*, args: object, config_path: Path, config: dict, rep
     if not publish:
         config["upload_config"] = upload_cfg
         save_config(config_path, config)
-        return PublishInputs(publish=False, publisher="", publisher_token_path=default_publisher_token_path(), upload_years=[])
+        return PublishInputs(
+            publish=False,
+            publisher_kind="pseudonym",
+            publisher_value="",
+            publisher_verified=False,
+            publisher_token_path=default_publisher_token_path(),
+            upload_years=[],
+        )
 
     upload_years = _prompt_upload_years(upload_cfg=upload_cfg, report_periods=report_periods)
     upload_cfg["upload_years"] = upload_years
@@ -337,8 +434,12 @@ def collect_publish_inputs(*, args: object, config_path: Path, config: dict, rep
         print("Continuing analysis. If publishing is enabled, the upload package is built after reports are generated.")
 
         publisher = str(getattr(args, "publisher", "") or "").strip()
-        if not publisher:
-            publisher = str(upload_cfg.get("publisher", "") or "").strip()
+        if publisher:
+            publisher_kind = "user_provided"
+            publisher_value = publisher
+            publisher_verified = False
+        else:
+            publisher_kind, publisher_value, publisher_verified = _publisher_identity_from_upload_cfg(upload_cfg)
 
         arg_token_path = getattr(args, "publisher_token_path", None)
         token_path_s = str(upload_cfg.get("publisher_token_path", "") or "").strip()
@@ -349,11 +450,16 @@ def collect_publish_inputs(*, args: object, config_path: Path, config: dict, rep
         config["upload_config"] = upload_cfg
         save_config(config_path, config)
 
-        return PublishInputs(publish=True, publisher=publisher, publisher_token_path=token_path, upload_years=upload_years)
+        return PublishInputs(
+            publish=True,
+            publisher_kind=publisher_kind,
+            publisher_value=publisher_value,
+            publisher_verified=publisher_verified,
+            publisher_token_path=token_path,
+            upload_years=upload_years,
+        )
 
-    arg_publisher = str(getattr(args, "publisher", "") or "").strip()
-    publisher_default = arg_publisher or str(upload_cfg.get("publisher", "") or "").strip()
-    publisher = _prompt_str("Public identity (blank for pseudonym)", default=publisher_default).strip()
+    publisher_kind, publisher_value, publisher_verified = _prompt_publisher_identity(upload_cfg=upload_cfg, config=config)
 
     arg_token_path = getattr(args, "publisher_token_path", None)
     token_default = str(upload_cfg.get("publisher_token_path", "") or "").strip()
@@ -363,13 +469,20 @@ def collect_publish_inputs(*, args: object, config_path: Path, config: dict, rep
         token_default = str(default_publisher_token_path())
     token_path = Path(_prompt_str("Publisher token path", default=token_default)).expanduser()
 
-    upload_cfg["publisher"] = publisher
+    _persist_publisher_identity(upload_cfg, kind=publisher_kind, value=publisher_value, verified=publisher_verified)
     upload_cfg["publisher_token_path"] = str(token_path)
     upload_cfg["llm_coding"] = _prompt_llm_coding(upload_cfg)
     config["upload_config"] = upload_cfg
     save_config(config_path, config)
 
-    return PublishInputs(publish=True, publisher=publisher, publisher_token_path=token_path, upload_years=upload_years)
+    return PublishInputs(
+        publish=True,
+        publisher_kind=publisher_kind,
+        publisher_value=publisher_value,
+        publisher_verified=publisher_verified,
+        publisher_token_path=token_path,
+        upload_years=upload_years,
+    )
 
 
 def build_upload_payload_from_results(
@@ -378,6 +491,7 @@ def build_upload_payload_from_results(
     results: list[RepoResult],
     publisher_kind: str,
     publisher_value: str,
+    publisher_verified: bool,
     llm_coding: dict[str, object] | None = None,
 ) -> dict:
     generated_at = dt.datetime.now(tz=dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -490,7 +604,7 @@ def build_upload_payload_from_results(
         "toolkit_version": __version__,
         "data_scope": "me",
         "repos_total": len(results),
-        "publisher": {"kind": publisher_kind, "value": publisher_value},
+        "publisher": {"kind": publisher_kind, "value": publisher_value, "verified": bool(publisher_verified)},
         "periods": [{"label": p.label, "start": p.start_iso, "end": p.end_iso} for p in periods],
         "year_totals": year_totals,
         "weekly": {
@@ -521,21 +635,38 @@ def publish_with_wizard(
 
     token = ensure_publisher_token(inputs.publisher_token_path)
 
-    pub = (inputs.publisher or "").strip()
-    publisher_kind = "pseudonym"
-    publisher_value = pseudonym_for_token(token)
-    if pub:
-        publisher_kind = "user_provided"
-        publisher_value = pub
+    publisher_kind = (inputs.publisher_kind or "").strip()
+    publisher_value = (inputs.publisher_value or "").strip()
+    publisher_verified = bool(inputs.publisher_verified)
+    if publisher_kind == "pseudonym":
+        publisher_value = pseudonym_for_token(token)
+        publisher_verified = False
+    elif publisher_kind == "github_username":
+        publisher_value = normalize_github_username(publisher_value)
+        publisher_verified = True
+    elif publisher_kind == "user_provided":
+        publisher_verified = False
+        if not publisher_value:
+            publisher_kind = "pseudonym"
+            publisher_value = pseudonym_for_token(token)
+    else:
+        publisher_kind = "pseudonym"
+        publisher_value = pseudonym_for_token(token)
+        publisher_verified = False
 
     upload_cfg = _load_upload_cfg(config_path)
     llm_coding = upload_cfg.get("llm_coding") if isinstance(upload_cfg.get("llm_coding"), dict) else None
+    ca_bundle_path = str(upload_cfg.get("ca_bundle_path", "") or "").strip()
+    override_ca_bundle = str(getattr(args, "ca_bundle", "") or "").strip() if args is not None else ""
+    if override_ca_bundle:
+        ca_bundle_path = override_ca_bundle
 
     payload = build_upload_payload_from_results(
         periods=upload_periods,
         results=results,
         publisher_kind=publisher_kind,
         publisher_value=publisher_value,
+        publisher_verified=publisher_verified,
         llm_coding=llm_coding,
     )
     payload_bytes = canonical_json_bytes(payload)
@@ -580,6 +711,7 @@ def publish_with_wizard(
         payload_bytes=payload_bytes,
         payload_sha256=sha,
         timeout_s=30,
+        ca_bundle_path=ca_bundle_path,
     )
     print("Upload complete.")
 
@@ -656,6 +788,7 @@ def upload_existing_report_dir(
     report_dir: Path,
     config_path: Path,
     upload_url_override: str = "",
+    ca_bundle_path_override: str = "",
     assume_yes: bool = False,
 ) -> int:
     report_dir = report_dir.resolve()
@@ -722,6 +855,9 @@ def upload_existing_report_dir(
     token_path_s = str(upload_cfg.get("publisher_token_path", "") or "").strip()
     token_path = Path(token_path_s).expanduser() if token_path_s else default_publisher_token_path()
     token = ensure_publisher_token(token_path)
+    ca_bundle_path = str(upload_cfg.get("ca_bundle_path", "") or "").strip()
+    if str(ca_bundle_path_override or "").strip():
+        ca_bundle_path = str(ca_bundle_path_override or "").strip()
 
     _print_upload_summary(payload=payload_obj, payload_path=payload_path, payload_sha256=sha)
 
@@ -767,6 +903,7 @@ def upload_existing_report_dir(
             payload_bytes=payload_bytes,
             payload_sha256=sha,
             timeout_s=30,
+            ca_bundle_path=ca_bundle_path,
         )
         print("Upload complete.")
     except RuntimeError as e:

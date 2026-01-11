@@ -4,7 +4,7 @@ Publishing is interactive and always prompts at run start whether to publish.
 
 The first time you publish (or if `upload_config` is missing), the wizard collects:
 1) Which years to include in the upload (full calendar years; 2025 is always included)
-2) Public identity (blank = derived pseudonym)
+2) Public identity mode: derived pseudonym (default), GitHub username (flagged as `verified`), or custom string (not verified)
 3) Publisher token path (local secret)
 4) LLM coding inflection points (start date, “>90% by LLM” date)
 5) Primary LLM coding tool (initial + current) from a fixed list
@@ -25,6 +25,7 @@ Default location: `~/.config/git-analysis/publisher_token` (override in the wiza
 
 ## Server destination
 The server base URL is configured in `config.json` under `upload_config.api_url` (or overridden via `--upload-url`).
+If your server uses HTTPS, the client verifies certificates using a discovered CA trust store; for private CAs, set `upload_config.ca_bundle_path` or pass `--ca-bundle`.
 
 Uploads are sent as:
 - `POST /api/v1/uploads`
@@ -48,3 +49,9 @@ If a report folder already contains `json/upload_package_v1.json`, you can uploa
 ```
 
 `--yes` skips the confirmation prompt.
+
+If HTTPS verification fails, provide a CA bundle:
+
+```bash
+./cli.sh upload --report-dir reports/<run-type>/<timestamp> --yes --ca-bundle /path/to/ca.pem
+```

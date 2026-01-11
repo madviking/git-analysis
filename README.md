@@ -49,6 +49,7 @@ Publishing is what enables public stats pages (LLM tools proficiency summary, le
 Server destination is configured in `config.json` under `upload_config.api_url` (or override with `--upload-url`).
 
 Uploads contain only your own (“me”) stats (not aggregate totals across all authors), contain no repo identifiers/URLs, and are always sent as full calendar years; you’ll be prompted for which years to include (2025 is always included).
+Publishing identity can be a derived pseudonym (default) or a GitHub username (flagged as `verified` in the upload payload).
 
 ## Development
 
@@ -95,12 +96,12 @@ These affect **line counts** and **language breakdowns**.
 
 ### Bootstraps / imports (recommended)
 
-Large “bootstrap/import” commits (e.g. scaffolding a new framework project) can dominate year-over-year totals. The analyzer can detect these commits by their shape (huge churn, many files, mostly additions) and exclude them from the main stats by default.
+Large “bootstrap/import” commits (e.g. scaffolding a new framework project, or deleting a large generated directory) can dominate year-over-year totals. The analyzer can detect these commits by their shape (huge churn, many files, mostly one-sided) and exclude them from the main stats by default.
 
 Config:
 - `bootstrap_changed_threshold`: minimum changed lines to be considered a bootstrap (default `50000`)
 - `bootstrap_files_threshold`: minimum files touched to be considered a bootstrap (default `200`)
-- `bootstrap_addition_ratio`: minimum `insertions/(insertions+deletions)` (default `0.9`)
+- `bootstrap_addition_ratio`: minimum `max(insertions,deletions)/(insertions+deletions)` (default `0.9`)
 
 CLI:
 - `--include-bootstraps`: include detected bootstrap commits in the main stats (they are always reported separately too).
@@ -154,6 +155,7 @@ Within a run directory:
 - Totals look too low: you may be analyzing a stale clone; rerun with the updated dedupe behavior (default) or use `--dedupe path` to compare.
 - Totals look too high: add/expand `exclude_path_prefixes` and `exclude_path_globs` to avoid counting vendored/minified/generated code.
 - YoY looks “impossible” (e.g. huge drop): confirm you didn’t run with `--max-repos`, then inspect the debug reports below to see which repos were included/excluded.
+- Upload fails with `CERTIFICATE_VERIFY_FAILED`: the client could not find a usable CA trust store; try `--ca-bundle /path/to/ca.pem` (or `upload_config.ca_bundle_path`), and on macOS with python.org Python, `Install Certificates.command` can also fix the global Python CA bundle.
 
 ## Debug reports (what’s missing?)
 
