@@ -186,3 +186,104 @@ def test_github_verify_cli_flow_signs_and_confirms(tmp_path: Path) -> None:
         "/api/v1/me/github/verify/challenge",
         "/api/v1/me/github/verify/confirm",
     ]
+
+
+def test_github_verify_cli_defaults_username_from_config(tmp_path: Path) -> None:
+    if os.name == "nt":
+        pytest.skip("ssh-keygen/openssl expectations are POSIX-focused")
+    if shutil.which("ssh-keygen") is None:
+        pytest.skip("ssh-keygen is required")
+    if shutil.which("openssl") is None:
+        pytest.skip("openssl is required")
+
+    received: list[dict[str, object]] = []
+    challenge = "abc123"
+    message_to_sign = "git-analysis verify: sign this exact message"
+
+    token_path = tmp_path / "publisher_token"
+    key_path = tmp_path / "publisher_ed25519"
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            token = self.headers.get("X-Publisher-Token")
+            body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            received.append({"path": self.path, "token": token, "body": body})
+
+            if self.path == "/api/v1/me/github/verify/challenge":
+                obj = json.loads(body.decode("utf-8"))
+                assert obj.get("github_username") == "madviking"
+                resp = {
+                    "challenge": challenge,
+                    "message_to_sign": message_to_sign,
+                    "expires_at": "2026-01-01T00:00:00Z",
+                }
+                out = json.dumps(resp).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+                return
+
+            if self.path == "/api/v1/me/github/verify/confirm":
+                obj = json.loads(body.decode("utf-8"))
+                assert obj.get("github_username") == "madviking"
+                assert obj.get("challenge") == challenge
+                sig_b64 = str(obj.get("signature") or "")
+                sig = base64.b64decode(sig_b64.encode("ascii"))
+                assert len(sig) == 64
+
+                resp = {"verified": True, "verified_at": "2026-01-01T00:00:00Z"}
+                out = json.dumps(resp).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+                return
+
+            self.send_response(404)
+            self.end_headers()
+
+        def log_message(self, fmt: str, *args: object) -> None:
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "me_github_usernames": ["madviking"],
+                "upload_config": {
+                    "api_url": f"http://127.0.0.1:{server.server_port}",
+                    "publisher_token_path": str(token_path),
+                    "publisher_key_path": str(key_path),
+                },
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str((Path(__file__).resolve().parents[1] / "src"))
+    cmd = [
+        str(Path(__file__).resolve().parents[1] / ".venv" / "bin" / "python"),
+        "-m",
+        "git_analysis.cli",
+        "github-verify",
+        "--config",
+        str(config_path),
+    ]
+    proc = subprocess.run(cmd, cwd=str(tmp_path), env=env, text=True, capture_output=True)
+    server.shutdown()
+
+    assert proc.returncode == 0, proc.stderr
+    assert [r.get("path") for r in received] == [
+        "/api/v1/me/github/verify/challenge",
+        "/api/v1/me/github/verify/confirm",
+    ]

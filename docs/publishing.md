@@ -46,12 +46,18 @@ Each publisher also has a local Ed25519 keypair (OpenSSH format) used for lightw
 
 - Config: `upload_config.publisher_key_path` (default `~/.config/git-analysis/publisher_ed25519`)
   - Public key is stored at `publisher_key_path + ".pub"` and is included in every upload payload as `publisher.public_key`.
-- Verify a GitHub username (optional): `./cli.sh github-verify --username <name>`
+- Verify a GitHub username (optional): `./cli.sh github-verify [--username <name>]`
   - You must add the public key to GitHub → Settings → SSH and GPG keys.
   - Requires `ssh-keygen` (key generation) and `openssl` (Ed25519 signing) on PATH.
+- Publish flow integration:
+  - If your publish display name is a valid GitHub username, the uploader offers to run verification after a successful upload.
+  - This step is opt-in and does **not** use OAuth; your private key never leaves your machine (only a signature is sent).
+  - Control prompting via `upload_config.github_verify`: `"ask"` (default), `"always"`, or `"never"`.
 
 ## Server destination
 The server base URL is configured in `config.json` under `upload_config.api_url` (or overridden via `--upload-url`).
+If you run the web UI separately from the API backend, ensure `api_url` points to the backend (the service that serves `/api/v1/*`), not the UI origin.
+For local dev with UI/API on different ports, the toolkit will also attempt a localhost port fallback for GitHub verification if it gets an HTML 404 from the UI.
 If your server uses HTTPS, the client verifies certificates using a discovered CA trust store; for private CAs, set `upload_config.ca_bundle_path` or pass `--ca-bundle`.
 
 Uploads are sent as:

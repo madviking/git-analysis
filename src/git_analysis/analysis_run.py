@@ -18,31 +18,114 @@ from .models import BootstrapConfig, RepoResult
 from .publish import PublishInputs, collect_publish_inputs, default_publisher_token_path, publish_with_wizard
 
 
-def _print_header(*, root: Path, periods: list[Period], jobs: int, dedupe: str, include_merges: bool, include_bootstraps: bool) -> None:
+def format_startup_header(
+    *,
+    root: Path,
+    periods: list[Period],
+    config_path: Path,
+    config_missing: bool,
+    jobs: int,
+    dedupe: str,
+    max_repos: int,
+    include_merges: bool,
+    include_bootstraps: bool,
+    top_authors: int,
+    detailed: bool,
+    publish: str,
+    publish_block_reasons: list[str],
+) -> str:
+    periods_s = ", ".join(f"{p.label} ({p.start_iso}..{p.end_iso})" for p in periods)
+    max_repos_s = "all" if int(max_repos) <= 0 else str(int(max_repos))
+
+    config_status = "missing (will auto-create; may prompt to review)" if config_missing else "found"
+
+    if publish_block_reasons:
+        publish_s = "disabled (unsupported flags: " + ", ".join(publish_block_reasons) + ")"
+    else:
+        default_s = publish if publish in ("yes", "no") else "from config"
+        publish_s = f"enabled (default: {default_s})"
+
     lines = [
         "┌──────────────────────────────────────────────────────────────┐",
         "│                         git-analysis                          │",
         "└──────────────────────────────────────────────────────────────┘",
         "",
-        "What to expect:",
-        f"- Scan root: {root}",
-        f"- Periods: {', '.join(p.label for p in periods)}",
-        f"- Jobs: {jobs}  Dedupe: {dedupe}  Merges: {'on' if include_merges else 'off'}  Bootstraps: {'on' if include_bootstraps else 'off'}",
-        "- Output: reports/<run-type>/<timestamp>/ (csv/, json/, timeseries/, markup/)",
-        "- Upload: if configured, you'll be prompted to upload; edit config.json (upload_config.*) to change upload settings",
+        "Run plan:",
+        f"1) Config: {config_path} ({config_status})",
+        f"2) Discover repos: under {root} (dedupe={dedupe}, max_repos={max_repos_s})",
+        (
+            "3) Analyze git history: "
+            f"periods={periods_s} (jobs={jobs}, merges={'on' if include_merges else 'off'}, "
+            f"bootstraps={'on' if include_bootstraps else 'off'}, detailed={'on' if detailed else 'off'}, top_authors={top_authors})"
+        ),
+        "4) Write reports: reports/<run-type>/<timestamp>/ (also updates reports/latest.txt)",
+        f"5) Publish prompt: {publish_s}",
+        "",
+        "Notes:",
+        "- Read-only: does not modify any git repositories.",
         "",
     ]
-    print("\n".join(lines))
+    return "\n".join(lines)
+
+
+def _print_header(
+    *,
+    root: Path,
+    periods: list[Period],
+    config_path: Path,
+    config_missing: bool,
+    jobs: int,
+    dedupe: str,
+    max_repos: int,
+    include_merges: bool,
+    include_bootstraps: bool,
+    top_authors: int,
+    detailed: bool,
+    publish: str,
+    publish_block_reasons: list[str],
+) -> None:
+    print(
+        format_startup_header(
+            root=root,
+            periods=periods,
+            config_path=config_path,
+            config_missing=config_missing,
+            jobs=jobs,
+            dedupe=dedupe,
+            max_repos=max_repos,
+            include_merges=include_merges,
+            include_bootstraps=include_bootstraps,
+            top_authors=top_authors,
+            detailed=detailed,
+            publish=publish,
+            publish_block_reasons=publish_block_reasons,
+        )
+    )
 
 
 def run_analysis(*, args: argparse.Namespace, periods: list[Period]) -> int:
+    publish_block_reasons: list[str] = []
+    if bool(args.include_merges):
+        publish_block_reasons.append("--include-merges")
+    if bool(args.include_bootstraps):
+        publish_block_reasons.append("--include-bootstraps")
+    if str(args.dedupe) != "remote":
+        publish_block_reasons.append(f"--dedupe {args.dedupe}")
+
     _print_header(
         root=args.root.resolve(),
         periods=periods,
+        config_path=Path(args.config),
+        config_missing=bool(args.config and not args.config.exists()),
         jobs=int(args.jobs),
         dedupe=str(args.dedupe),
+        max_repos=int(args.max_repos),
         include_merges=bool(args.include_merges),
         include_bootstraps=bool(args.include_bootstraps),
+        top_authors=int(args.top_authors),
+        detailed=bool(args.detailed),
+        publish=str(args.publish),
+        publish_block_reasons=publish_block_reasons,
     )
 
     if args.config and not args.config.exists():
@@ -55,16 +138,8 @@ def run_analysis(*, args: argparse.Namespace, periods: list[Period]) -> int:
     else:
         config = load_config(args.config)
 
-    upload_block_reasons: list[str] = []
-    if bool(args.include_merges):
-        upload_block_reasons.append("--include-merges")
-    if bool(args.include_bootstraps):
-        upload_block_reasons.append("--include-bootstraps")
-    if str(args.dedupe) != "remote":
-        upload_block_reasons.append(f"--dedupe {args.dedupe}")
-
-    if upload_block_reasons:
-        print("Note: publishing disabled for this run (unsupported flags: " + ", ".join(upload_block_reasons) + ").")
+    if publish_block_reasons:
+        print("Note: publishing disabled for this run (unsupported flags: " + ", ".join(publish_block_reasons) + ").")
         publish_inputs = PublishInputs(
             publish=False,
             display_name="",

@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from . import __version__
 from .analysis_aggregate import aggregate_weekly_me, aggregate_weekly_me_tech
@@ -489,12 +490,18 @@ def build_upload_payload_from_results(
 
         active_repos_by_week: dict[str, int] = {}
         new_repos_by_week: dict[str, int] = {}
+        repo_changed_by_week: dict[str, list[int]] = {}
         for r in results:
             wmap = r.me_weekly_by_period_excl_bootstraps.get(label, {})
             for wk, st in wmap.items():
                 if int(st.get("commits", 0)) <= 0:
                     continue
                 active_repos_by_week[wk] = int(active_repos_by_week.get(wk, 0)) + 1
+                ins = int(st.get("insertions", 0) or 0)
+                dele = int(st.get("deletions", 0) or 0)
+                changed = ins + dele
+                if changed > 0:
+                    repo_changed_by_week.setdefault(wk, []).append(changed)
 
             if r.first_commit_iso:
                 try:
@@ -512,6 +519,12 @@ def build_upload_payload_from_results(
             for week_start in keys:
                 st = w.get(week_start, {})
                 techs = tech.get(week_start, {})
+                total_changed = int(st.get("changed", 0) or 0)
+                tops = sorted((int(v) for v in repo_changed_by_week.get(week_start, []) if int(v) > 0), reverse=True)
+                top1 = tops[0] if tops else 0
+                top3 = sum(tops[:3]) if tops else 0
+                share1 = round(top1 / total_changed, 6) if total_changed > 0 else 0.0
+                share3 = round(top3 / total_changed, 6) if total_changed > 0 else 0.0
                 tech_rows: list[dict[str, int | str]] = []
                 for tname, tst in techs.items():
                     changed = int(tst.get("changed", 0))
@@ -534,7 +547,9 @@ def build_upload_payload_from_results(
                         "commits": int(st.get("commits", 0)),
                         "insertions": int(st.get("insertions", 0)),
                         "deletions": int(st.get("deletions", 0)),
-                        "changed": int(st.get("changed", 0)),
+                        "changed": total_changed,
+                        "repo_activity_top1_share_changed": share1,
+                        "repo_activity_top3_share_changed": share3,
                         "repos_active": int(active_repos_by_week.get(week_start, 0)),
                         "repos_new": int(new_repos_by_week.get(week_start, 0)),
                         "technologies": tech_rows,
@@ -600,6 +615,18 @@ def build_upload_payload_from_results(
             "series_by_period": weekly_by_period,
         },
     }
+    nonzero_commits_weeks = 0
+    nonzero_changed_weeks = 0
+    for rows in weekly_by_period.values():
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            if int(r.get("commits", 0) or 0) > 0:
+                nonzero_commits_weeks += 1
+            if int(r.get("changed", 0) or 0) > 0:
+                nonzero_changed_weeks += 1
+    base["weekly_nonzero_commits_weeks"] = nonzero_commits_weeks
+    base["weekly_nonzero_changed_weeks"] = nonzero_changed_weeks
     if isinstance(llm_coding, dict) and llm_coding:
         base["llm_coding"] = llm_coding
     return base
@@ -702,6 +729,215 @@ def publish_with_wizard(
         ca_bundle_path=ca_bundle_path,
     )
     print(f"Display name updated: {display_name}")
+    _maybe_verify_github_username_after_upload(
+        api_url=api_url,
+        publisher_token=token,
+        publisher_private_key_path=key_path,
+        ca_bundle_path=ca_bundle_path,
+        upload_cfg=upload_cfg,
+        inputs=inputs,
+        config_path=config_path,
+    )
+
+
+def _maybe_verify_github_username_after_upload(
+    *,
+    api_url: str,
+    publisher_token: str,
+    publisher_private_key_path: Path,
+    ca_bundle_path: str,
+    upload_cfg: dict[str, object],
+    inputs: PublishInputs,
+    config_path: Path | None = None,
+) -> None:
+    desired = str((inputs.display_name or "")).strip()
+    if not _is_valid_github_username(desired):
+        return
+    username = normalize_github_username(desired)
+    if not username:
+        return
+
+    mode = str(upload_cfg.get("github_verify", "ask") or "ask").strip().lower()
+    if mode in ("no", "never", "false", "0", "off", "disable", "disabled"):
+        return
+
+    print("")
+    print("Optional: verify your GitHub username with the server (no OAuth).")
+    print("This proves you control the publisher private key AND that GitHub lists your matching public key.")
+    print("Your private key never leaves this machine; the request sends only:")
+    print("- github_username")
+    print("- a short-lived server challenge")
+    print("- a signature you create locally")
+    print("Note: your publisher public key is already included in uploads and used for this verification.")
+    print("")
+
+    do_verify = False
+    if mode in ("yes", "always", "true", "1", "on", "enable", "enabled"):
+        do_verify = True
+    else:
+        do_verify = _prompt_bool(f"Verify GitHub username '{username}' now?", default=False)
+    if not do_verify:
+        return
+
+    print("")
+    print("Precondition: add your publisher public key to GitHub → Settings → SSH and GPG keys.")
+    print("If you haven't added it yet, verification will fail safely and you can retry later.")
+    print("")
+
+    for attempt in range(2):
+        ch: dict[str, object] | None = None
+        challenge_url = str(api_url).rstrip("/") + "/api/v1/me/github/verify/challenge"
+        _print_api_call(method="POST", url=challenge_url, payload={"github_username": username})
+        try:
+            ch = github_verify_challenge_v1(
+                api_url=api_url,
+                publisher_token=publisher_token,
+                github_username=username,
+                timeout_s=30,
+                ca_bundle_path=ca_bundle_path,
+            )
+        except RuntimeError as e:
+            msg = str(e).strip()
+            if _is_html_404_error(msg):
+                for cand in _fallback_api_url_candidates(api_url):
+                    print(f"Note: retrying GitHub verification against {cand} (derived from api_url).")
+                    try:
+                        ch = github_verify_challenge_v1(
+                            api_url=cand,
+                            publisher_token=publisher_token,
+                            github_username=username,
+                            timeout_s=30,
+                            ca_bundle_path=ca_bundle_path,
+                        )
+                    except RuntimeError:
+                        continue
+                    api_url = cand
+                    if config_path is not None:
+                        try:
+                            _save_upload_api_url(config_path, api_url)
+                        except Exception:
+                            pass
+                    break
+            if ch is None:
+                print(msg or "Error: GitHub verification failed")
+                _print_github_verify_error_hint(msg)
+                return
+
+        challenge = str((ch or {}).get("challenge", "") or "").strip()
+        message_to_sign = str((ch or {}).get("message_to_sign", "") or "")
+        if not challenge or not message_to_sign:
+            print("Error: github-verify challenge response missing fields")
+            return
+
+        sig_b64 = sign_publisher_ed25519_message_base64(private_key_path=publisher_private_key_path, message_to_sign=message_to_sign)
+        _print_api_call(
+            method="POST",
+            url=str(api_url).rstrip("/") + "/api/v1/me/github/verify/confirm",
+            payload={"github_username": username, "challenge": challenge, "signature": sig_b64},
+        )
+        try:
+            resp = github_verify_confirm_v1(
+                api_url=api_url,
+                publisher_token=publisher_token,
+                github_username=username,
+                challenge=challenge,
+                signature=sig_b64,
+                timeout_s=30,
+                ca_bundle_path=ca_bundle_path,
+            )
+        except RuntimeError as e:
+            msg = str(e).strip()
+            print(msg or "Error: GitHub verification failed")
+            if _is_profile_public_key_not_found_error(msg):
+                _print_github_key_add_instructions(github_username=username, publisher_key_path=publisher_private_key_path)
+                if attempt == 0 and _prompt_bool("Retry GitHub verification now?", default=False):
+                    continue
+                return
+            _print_github_verify_error_hint(msg)
+            return
+
+        if bool(resp.get("verified", False)):
+            verified_at = str(resp.get("verified_at", "") or "").strip()
+            if verified_at:
+                print(f"GitHub username verified: {username} (verified_at={verified_at})")
+            else:
+                print(f"GitHub username verified: {username}")
+            return
+
+        print("GitHub verification not confirmed; retry after adding the SSH key to GitHub.")
+        return
+
+
+def _print_github_verify_error_hint(msg: str) -> None:
+    s = str(msg or "").strip()
+    if not s:
+        return
+    low = s.lower()
+    if "http 404" not in low:
+        return
+    if "<!doctype html" in low or "<html" in low:
+        print("Hint: this looks like a web UI server responding with an HTML 404 page.")
+        print("      Set `upload_config.api_url` to the API backend base URL that serves `/api/v1/*` endpoints.")
+        return
+    if "profile not found" in low:
+        print("Hint: upload once first to create a profile, then retry verification.")
+        return
+    print("Hint: your backend may not implement the GitHub verification endpoints; update the backend and retry.")
+
+def _is_html_404_error(msg: str) -> bool:
+    s = str(msg or "").strip().lower()
+    if "http 404" not in s:
+        return False
+    return "<!doctype html" in s or "<html" in s
+
+
+def _fallback_api_url_candidates(api_url: str) -> list[str]:
+    u0 = (api_url or "").strip()
+    if not u0:
+        return []
+    parts = urlsplit(u0)
+    host = parts.hostname or ""
+    if host not in ("localhost", "127.0.0.1", "0.0.0.0", "::1"):
+        return []
+    port = parts.port
+    if port is None:
+        return []
+    candidates: list[int] = []
+    if port > 1:
+        candidates.append(port - 1)
+    seen: set[str] = set()
+    out: list[str] = []
+    for p in candidates:
+        netloc = f"{host}:{p}"
+        rebuilt = urlunsplit((parts.scheme or "http", netloc, parts.path or "", "", ""))
+        rebuilt = rebuilt.rstrip("/")
+        if rebuilt and rebuilt not in seen:
+            seen.add(rebuilt)
+            out.append(rebuilt)
+    return out
+
+
+def _is_profile_public_key_not_found_error(msg: str) -> bool:
+    s = str(msg or "").lower()
+    if "http 400" not in s:
+        return False
+    if "profile public key not found on github user" in s:
+        return True
+    if "key not found on github" in s:
+        return True
+    return False
+
+
+def _print_github_key_add_instructions(*, github_username: str, publisher_key_path: Path) -> None:
+    print("")
+    print("GitHub could not find your publisher public key on that account.")
+    print("Add the publisher public key as an SSH key (not a GPG key):")
+    print(f"- Open: https://github.com/settings/keys")
+    print("- Click: New SSH key (not 'New GPG key')")
+    print("- Key type: Authentication key (not 'Signing key')")
+    print(f"- Paste the full `ssh-ed25519 ...` line from: {Path(str(publisher_key_path) + '.pub')}")
+    print(f"- Sanity check: https://api.github.com/users/{github_username}/keys should list that key (signing keys do not appear there).")
+    print("")
 
 
 def json_preview(data: object) -> str:
@@ -1054,8 +1290,23 @@ def verify_github_username(
         ca_bundle_path = str(ca_bundle_path_override or "").strip()
 
     username = normalize_github_username(github_username)
+    if not username:
+        cfg = load_config(config_path)
+        me_gh = cfg.get("me_github_usernames")
+        if isinstance(me_gh, list):
+            for u in me_gh:
+                if _is_valid_github_username(str(u or "")):
+                    username = normalize_github_username(str(u or ""))
+                    break
+        if not username and _is_valid_github_username(str(cfg.get("github_username") or "")):
+            username = normalize_github_username(str(cfg.get("github_username") or ""))
+        if not username and _is_valid_github_username(str(upload_cfg.get("display_name") or "")):
+            username = normalize_github_username(str(upload_cfg.get("display_name") or ""))
+        if not username and _is_valid_github_username(str(upload_cfg.get("publisher") or "")):
+            username = normalize_github_username(str(upload_cfg.get("publisher") or ""))
+
     if not _is_valid_github_username(username):
-        print("Error: invalid GitHub username")
+        print("Error: invalid GitHub username (pass --username, or set `me_github_usernames` in config.json)")
         return 2
 
     print("")
@@ -1064,19 +1315,44 @@ def verify_github_username(
     print(public_key)
     print("")
 
+    ch: dict[str, object] | None = None
     try:
         _print_api_call(
             method="POST",
             url=str(api_url).rstrip("/") + "/api/v1/me/github/verify/challenge",
             payload={"github_username": username},
         )
-        ch = github_verify_challenge_v1(
-            api_url=api_url,
-            publisher_token=token,
-            github_username=username,
-            timeout_s=30,
-            ca_bundle_path=ca_bundle_path,
-        )
+        try:
+            ch = github_verify_challenge_v1(
+                api_url=api_url,
+                publisher_token=token,
+                github_username=username,
+                timeout_s=30,
+                ca_bundle_path=ca_bundle_path,
+            )
+        except RuntimeError as e:
+            msg = str(e).strip()
+            if _is_html_404_error(msg):
+                for cand in _fallback_api_url_candidates(api_url):
+                    print(f"Note: retrying GitHub verification against {cand} (derived from api_url).")
+                    try:
+                        ch = github_verify_challenge_v1(
+                            api_url=cand,
+                            publisher_token=token,
+                            github_username=username,
+                            timeout_s=30,
+                            ca_bundle_path=ca_bundle_path,
+                        )
+                    except RuntimeError:
+                        continue
+                    api_url = cand
+                    try:
+                        _save_upload_api_url(config_path, api_url)
+                    except Exception:
+                        pass
+                    break
+            if ch is None:
+                raise
         challenge = str(ch.get("challenge", "") or "").strip()
         message_to_sign = str(ch.get("message_to_sign", "") or "")
         if not challenge or not message_to_sign:
@@ -1100,8 +1376,10 @@ def verify_github_username(
     except RuntimeError as e:
         msg = str(e).strip()
         print(msg or "Error: GitHub verification failed")
-        if "HTTP 404" in msg:
-            print("Hint: upload once first to create a profile, then retry verification.")
+        if _is_profile_public_key_not_found_error(msg):
+            _print_github_key_add_instructions(github_username=username, publisher_key_path=key_path)
+            return 2
+        _print_github_verify_error_hint(msg)
         return 2
 
     if bool(resp.get("verified", False)):

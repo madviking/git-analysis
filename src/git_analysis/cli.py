@@ -64,7 +64,7 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--config", type=Path, default=Path("config.json"), help="Path to config.json.")
         p.add_argument("--api-url", type=str, default="", help="Override `upload_config.api_url`.")
         p.add_argument("--ca-bundle", type=str, default="", help="Path to a CA bundle file/dir for HTTPS verification (overrides `upload_config.ca_bundle_path`).")
-        p.add_argument("--username", type=str, required=True, help="GitHub username to verify.")
+        p.add_argument("--username", type=str, default="", help="GitHub username to verify (defaults to the first `me_github_usernames[]` entry in config.json, if present).")
         args = p.parse_args(argv[1:])
         return verify_github_username(
             config_path=args.config,

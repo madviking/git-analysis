@@ -13,7 +13,7 @@
   ],
   "upload_config": {
     "automatic_upload": "confirm",
-    "api_url": "http://localhost:3220",
+    "api_url": "https://gitstats.east.fi",
     "ca_bundle_path": "",
     "default_publish": false,
     "upload_years": [
@@ -27,6 +27,7 @@
       "primary_tool_current": "none"
     },
     "display_name": "",
+    "github_verify": "ask",
     "publisher_token_path": "~/.config/git-analysis/publisher_token",
     "publisher_key_path": "~/.config/git-analysis/publisher_ed25519"
   },

@@ -16,6 +16,8 @@ The payload is:
 - `toolkit_version` (string): git-analysis version
 - `data_scope` (string): `"me"`
 - `repos_total` (int): number of repos analyzed in this run (after filtering/dedupe)
+- `weekly_nonzero_commits_weeks` (int): number of weekly rows (across all uploaded periods) with `commits > 0`
+- `weekly_nonzero_changed_weeks` (int): number of weekly rows (across all uploaded periods) with `changed > 0`
 - `publisher` (object):
   - `kind` (string): `"pseudonym"` | `"user_provided"`
   - `value` (string): pseudonym or user-provided identity
@@ -61,6 +63,8 @@ Each weekly row:
 - `insertions` (int): **me-only**
 - `deletions` (int): **me-only**
 - `changed` (int)
+- `repo_activity_top1_share_changed` (float): fraction of `changed` attributable to the single most-active repo that week (0..1; `0.0` when `changed == 0`)
+- `repo_activity_top3_share_changed` (float): fraction of `changed` attributable to the top 3 repos that week (0..1; `0.0` when `changed == 0`)
 - `repos_active` (int): number of repos with ≥1 **me** commit in this week
 - `repos_new` (int): number of repos whose first historical commit falls in this week
 - `technologies` (array): per-language breakdown for this week (optional empty)

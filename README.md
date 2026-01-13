@@ -33,6 +33,7 @@ cd git-analysis
 brew install uv  # or follow https://docs.astral.sh/uv/
 ./cli.sh --root .. --years 2024 2025
 ```
+At startup, the CLI prints a short run plan (config/root/periods/output/publish) before analysis begins.
 Reports are written under `reports/<run-type>/<timestamp>/` and `reports/latest.txt` points to the most recent run directory.
 
 ## Documentation
@@ -58,6 +59,7 @@ Each API request is printed before it’s sent (URL + payload file path for uplo
 The publisher token is a random local secret stored in a file (not derived from SSH keys); the CLI prints an explanation when creating/using it.
 Uploads also include a publisher Ed25519 public key (`publisher.public_key`) generated and stored locally alongside the token; it can be used for GitHub username verification without OAuth (`./cli.sh github-verify`).
 You can update your public display name later via `./cli.sh display-name --name "New Name"` or reset it to a pseudonym via `./cli.sh display-name --pseudonym`.
+If you set your publish display name to a GitHub username, the publish flow will offer to verify it after upload (opt-in; no private keys are uploaded).
 
 ## Development
 
