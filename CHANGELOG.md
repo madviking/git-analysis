@@ -52,6 +52,7 @@ The format is based on Keep a Changelog, and this project follows SemVer where a
 - Unless `--include-bootstraps` is set, comparison reports only show the bootstrap-excluding view (no separate bootstraps/including tables).
 - “In review” report naming now reflects non-year periods (e.g. `period_in_review_2025H1_vs_2025H2.*` instead of `year_in_review_...`).
 - README now links directly to `docs/` pages (configuration, output, publishing, payload, development).
+- README includes Web UI screenshots for uploaded stats.
 
 ## [0.1.0]
 

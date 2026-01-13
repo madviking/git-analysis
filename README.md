@@ -185,3 +185,19 @@ Quick consistency check (language totals vs aggregate totals):
 ```bash
 python -m git_analysis.validate_reports --reports reports --years 2024 2025
 ```
+
+## What you get by uploading to web
+
+Uploading your “me” stats to a web backend (example: https://gitstats.east.fi/) gives you a shareable public profile page with:
+
+- Adoption score + confidence
+- Your LLM inflection dates (if provided)
+- Interactive graphs (activity, commits, repos, technologies)
+- Summary totals and top languages/technologies
+
+<img src="docs/webui1.png" alt="Web UI: profile overview and activity graph" width="900" />
+
+<img src="docs/webui2.png" alt="Web UI: technologies graph" width="900" />
+
+### Example of an embeddable card
+![LLM Git Inflection](https://gitstats.east.fi/embed/anon_2312614d9b28)
