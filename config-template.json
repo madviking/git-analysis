@@ -1,0 +1,109 @@
+{
+  "me_emails": [
+  ],
+  "me_names": [
+  ],
+  "me_github_usernames": [
+  ],
+  "include_remote_prefixes": [
+  ],
+  "remote_name_priority": [
+    "origin",
+    "upstream"
+  ],
+  "upload_config": {
+    "automatic_upload": "confirm",
+    "api_url": "https://gitstats.east.fi",
+    "ca_bundle_path": "",
+    "default_publish": false,
+    "upload_years": [
+      2024,
+      2025
+    ],
+    "llm_coding": {
+      "started_at": null,
+      "dominant_at": null,
+      "primary_tool_initial": "none",
+      "primary_tool_current": "none"
+    },
+    "display_name": "",
+    "github_verify": "ask",
+    "publisher_token_path": "~/.config/git-analysis/publisher_token",
+    "publisher_key_path": "~/.config/git-analysis/publisher_ed25519"
+  },
+  "excluded_repos": [
+  ],
+  "remote_filter_mode": "any",
+  "exclude_forks": true,
+  "fork_remote_names": [
+    "upstream"
+  ],
+  "bootstrap_exclude_shas": [
+  ],
+  "exclude_commits": [
+  ],
+  "exclude_path_prefixes": [
+    "vendor/",
+    "node_modules/",
+    "dist/",
+    "build/",
+    "target/",
+    ".venv/",
+    ".idea/",
+    ".pytest_cache/",
+    "__pycache__/",
+    ".mypy_cache/",
+    ".ruff_cache/",
+    ".tox/",
+    "coverage/",
+    ".terraform/",
+    ".terragrunt-cache/"
+  ],
+  "exclude_path_globs": [
+    "**/vendor/**",
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/target/**",
+    "**/.venv/**",
+    "**/.tox/**",
+    "**/coverage/**",
+    "**/import/**",
+    "**/export/**",
+    "**/dictionaries/**",
+    "**/.mypy_cache/**",
+    "**/.ruff_cache/**",
+    "**/.terraform/**",
+    "**/.terragrunt-cache/**",
+    "**/.next/**",
+    "**/.nuxt/**",
+    "**/.svelte-kit/**",
+    "**/*.min.js",
+    "**/*.min.css"
+  ],
+  "exclude_dirnames": [
+    ".git",
+    ".venv",
+    "git-analysis",
+    "node_modules",
+    "vendor",
+    "dist",
+    "build",
+    "target",
+    ".idea",
+    ".pytest_cache",
+    "__pycache__",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".tox",
+    "coverage",
+    ".terraform",
+    ".terragrunt-cache",
+    ".next",
+    ".nuxt",
+    ".svelte-kit",
+    "out",
+    "uploads",
+    "cache"
+  ]
+}

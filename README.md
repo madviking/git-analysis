@@ -18,6 +18,8 @@ When exactly two years are requested, it also produces a side-by-side comparison
 
 All output files go to `git-analysis/reports/`.
 
+Note: text and Markdown reports abbreviate large numbers (e.g. `1K`, `2.5M`, `1B`) including large percentage deltas.
+
 ## Requirements
 
 - Python 3.11+
@@ -29,14 +31,48 @@ All output files go to `git-analysis/reports/`.
 ```bash
 cd git-analysis
 brew install uv  # or follow https://docs.astral.sh/uv/
-cp config.example.json config.json
 ./cli.sh --root .. --years 2024 2025
 ```
+At startup, the CLI prints a short run plan (config/root/periods/output/publish) before analysis begins.
 Reports are written under `reports/<run-type>/<timestamp>/` and `reports/latest.txt` points to the most recent run directory.
+
+## Documentation
+
+- [Docs index](docs/index.md)
+- [Configuration (`config.json`)](docs/configuration.md)
+- [Output structure](docs/output.md)
+- [Publishing (upload wizard)](docs/publishing.md)
+- [Upload payload (`upload_package_v1`)](docs/upload-payload.md)
+- [Development](docs/development.md)
+
+## Publishing (upload wizard)
+
+Every run prompts whether to publish results. The first time you publish, the wizard collects/saves upload defaults to `config.json` under `upload_config.*`.
+Once `upload_config` is set up, the wizard no longer asks you to click through all selections; update settings by editing `config.json`.
+
+Publishing is what enables public stats pages (LLM tools proficiency summary, leaderboards/top lists, and commit/churn graphs).
+
+Server destination is configured in `config.json` under `upload_config.api_url` (or override with `--upload-url`).
+
+Uploads contain only your own (“me”) stats (not aggregate totals across all authors), contain no repo identifiers/URLs, and are always sent as full calendar years; you’ll be prompted for which years to include (2025 is always included).
+Each API request is printed before it’s sent (URL + payload file path for uploads, or inline JSON for small requests like display-name updates).
+The publisher token is a random local secret stored in a file (not derived from SSH keys); the CLI prints an explanation when creating/using it.
+Uploads also include a publisher Ed25519 public key (`publisher.public_key`) generated and stored locally alongside the token; it can be used for GitHub username verification without OAuth (`./cli.sh github-verify`).
+You can update your public display name later via `./cli.sh display-name --name "New Name"` or reset it to a pseudonym via `./cli.sh display-name --pseudonym`.
+If you set your publish display name to a GitHub username, the publish flow will offer to verify it after upload (opt-in; no private keys are uploaded).
+
+## Development
+
+Run tests:
+
+```bash
+uv sync --group dev
+.venv/bin/python -m pytest
+```
 
 ## Configuration (`config.json`)
 
-Start from `config.example.json`.
+Start from `config-template.json` or let the tool generate `config.json` if missing.
 
 ### Identify “me”
 
@@ -47,11 +83,13 @@ Start from `config.example.json`.
 - `me_github_usernames`: GitHub username(s) used to match `*@users.noreply.github.com` emails, e.g. `["trailo"]`
 
 If `config.json` is missing, the script tries to infer `user.email` and `user.name` from global git config.
+If `config.json` is missing, it is created from `config-template.json`, pre-filled with inferred identity + scanned repo remotes, then you’re prompted to review/edit before analysis continues.
 
 ### Choose which repos are included
 
 - `include_remote_prefixes`: only include repos whose `remote.origin.url` matches one of these prefixes.
   - Handles both `https://github.com/org/repo` and `git@github.com:org/repo` styles.
+- `excluded_repos`: glob patterns to skip specific repo paths under `--root` (e.g. `["**/archive/**", "**/mirror/**"]`).
 - `remote_name_priority`: when multiple remotes exist (common for forks), prefer these remotes for identifying/deduping the repo (default `["origin","upstream"]`).
 - `remote_filter_mode`:
   - `"any"` (default): include a repo if **any** remote matches `include_remote_prefixes` (helps when `origin` is a fork but `upstream` is the org repo).
@@ -68,12 +106,13 @@ These affect **line counts** and **language breakdowns**.
 
 ### Bootstraps / imports (recommended)
 
-Large “bootstrap/import” commits (e.g. scaffolding a new framework project) can dominate year-over-year totals. The analyzer can detect these commits by their shape (huge churn, many files, mostly additions) and exclude them from the main stats by default.
+Large “bootstrap/import” commits (e.g. scaffolding a new framework project, or deleting a large generated directory) can dominate year-over-year totals. The analyzer can detect these commits by their shape (huge churn, many files, mostly one-sided) and exclude them from the main stats by default. Extremely large outliers (very large one-sided commits, or very large multi-file sweeps) are also treated as bootstraps.
 
 Config:
 - `bootstrap_changed_threshold`: minimum changed lines to be considered a bootstrap (default `50000`)
 - `bootstrap_files_threshold`: minimum files touched to be considered a bootstrap (default `200`)
-- `bootstrap_addition_ratio`: minimum `insertions/(insertions+deletions)` (default `0.9`)
+- `bootstrap_addition_ratio`: minimum `max(insertions,deletions)/(insertions+deletions)` (default `0.9`)
+- `exclude_commits`: list of commit SHAs to exclude entirely from stats
 
 CLI:
 - `--include-bootstraps`: include detected bootstrap commits in the main stats (they are always reported separately too).
@@ -87,8 +126,8 @@ CLI:
 Common:
 - `--root PATH`: directory to scan for repos (default `..`)
 - `--years 2024 2025`: which years to compute
-- `--periods 2025H1 2025H2`: analyze arbitrary periods (supports `YYYY`, `YYYYH1`, `YYYYH2`)
-- `--halves 2025`: shortcut for `2025H1` vs `2025H2`
+- `--periods 2025H1 2025H2`: analyze arbitrary periods (supports `YYYY`, `YYYYH1`/`H1YYYY`, `YYYYH2`/`H2YYYY`)
+- `--halves 2025`: shortcut for `2025H1` vs `2025H2` (also supports `--halves H12025,H12026`)
 - `--jobs N`: parallel workers for `git` calls
 - `--max-repos N`: analyze only the first N unique repos (good for trial runs)
 
@@ -104,22 +143,15 @@ ASCII output:
 
 ## Output files
 
-- `reports/year_YYYY_summary.json`: aggregates + top authors + config used for that run
-- `reports/year_YYYY_repos.csv`: per-repo totals (includes selected `remote_name`, `remote_canonical`, duplicates, first/last commit timestamps)
-- `reports/year_YYYY_authors.csv`: per-author totals
-- `reports/year_YYYY_languages.csv`: per-language totals (by file extension)
-- `reports/year_YYYY_bootstraps_commits.csv`: detected bootstrap commits (per-commit totals)
-- `reports/year_YYYY_bootstraps_authors.csv`: author totals for bootstrap commits only
-- `reports/year_YYYY_bootstraps_languages.csv`: language totals for bootstrap commits only
-- `reports/year_YYYY_bootstraps_dirs.csv`: directory totals for bootstrap commits only
-- `reports/comparison_YYYY_vs_YYYY.md`: side-by-side report with Δ and Δ% (only when 2 years are provided)
-- `reports/year_in_review_YYYY.txt`: ASCII “Year in Review” for that year
-- `reports/year_in_review_YYYY_vs_YYYY.txt`: ASCII year-over-year “Year in Review” (only when 2 years are provided)
-- `reports/repo_selection.csv`: debug list of discovered repos and why included/skipped/duplicated
-- `reports/repo_activity.csv`: per-repo activity across the requested years (excl bootstraps / bootstraps / incl bootstraps)
-- `reports/run_meta.json`: metadata about the run
-- `reports/year_<period>_me_timeseries.json`: (when `--detailed`) “me” monthly totals + per-technology (language) rows
-- `reports/me_timeseries.json`: (when `--detailed`) all requested periods in one JSON
+Reports are written under `reports/<run-type>/<timestamp>/` and `reports/latest.txt` points to the most recent run directory.
+
+Within a run directory:
+- Root: `year_in_review_<YYYY>.txt` / `period_in_review_<period>.txt`, `year_in_review_<YYYY0>_vs_<YYYY1>.txt` / `period_in_review_<p0>_vs_<p1>.txt`, `comparison_<p0>_vs_<p1>.txt`, `llm_inflection_stats.txt` (when configured)
+- `markup/`: `year_in_review_*.md`, `period_in_review_*.md`, `comparison_<p0>_vs_<p1>.md`, `llm_inflection_stats.md` (when configured)
+- `json/`: `year_<period>_summary.json`, `year_<period>_excluded.json`, `run_meta.json`
+- `csv/`: `year_<period>_repos.csv`, `year_<period>_authors.csv`, `year_<period>_languages.csv`, `year_<period>_dirs.csv`, `year_<period>_bootstraps_*.csv`, `repo_activity.csv`, `top_commits.csv`
+- `timeseries/`: `year_<period>_weekly.json`, plus (when `--detailed`) `year_<period>_me_timeseries.json` and `me_timeseries.json`
+- `debug/`: `repo_selection.csv`, `repo_selection_summary.json`
 
 ## Important notes (accuracy)
 
@@ -134,16 +166,17 @@ ASCII output:
 - Totals look too low: you may be analyzing a stale clone; rerun with the updated dedupe behavior (default) or use `--dedupe path` to compare.
 - Totals look too high: add/expand `exclude_path_prefixes` and `exclude_path_globs` to avoid counting vendored/minified/generated code.
 - YoY looks “impossible” (e.g. huge drop): confirm you didn’t run with `--max-repos`, then inspect the debug reports below to see which repos were included/excluded.
+- Upload fails with `CERTIFICATE_VERIFY_FAILED`: the client could not find a usable CA trust store; try `--ca-bundle /path/to/ca.pem` (or `upload_config.ca_bundle_path`), and on macOS with python.org Python, `Install Certificates.command` can also fix the global Python CA bundle.
 
 ## Debug reports (what’s missing?)
 
 These files help explain why a repo did or didn’t make it into the analysis:
 
-- `reports/repo_selection.csv`: one row per discovered candidate repo with `status` and `reason` (e.g. `remote_filter_no_match`, `no_remotes`, `duplicate`)
-- `reports/repo_selection_summary.json`: counts by status/reason
-- `reports/repo_activity.csv`: per-repo activity across the requested years (excl bootstraps / bootstraps / incl bootstraps)
-- `reports/year_YYYY_dirs.csv`: directory-level churn (top-level directory like `src`, `tests`, `docs`, `(root)`)
-- `reports/year_YYYY_excluded.json`: how many lines/files were skipped by `exclude_path_prefixes`/`exclude_path_globs`
+- `debug/repo_selection.csv`: one row per discovered candidate repo with `status` and `reason` (e.g. `remote_filter_no_match`, `no_remotes`, `duplicate`)
+- `debug/repo_selection_summary.json`: counts by status/reason
+- `csv/repo_activity.csv`: per-repo activity across the requested years (excl bootstraps / bootstraps / incl bootstraps)
+- `csv/year_YYYY_dirs.csv`: directory-level churn (top-level directory like `src`, `tests`, `docs`, `(root)`)
+- `json/year_YYYY_excluded.json`: how many lines/files were skipped by `exclude_path_prefixes`/`exclude_path_globs`
 
 ## Validate reports
 
