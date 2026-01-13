@@ -4,6 +4,8 @@ Reports are written under `reports/<run-type>/<timestamp>/`. `reports/latest.txt
 
 Text and Markdown reports abbreviate large numbers (e.g. `1K`, `2.5M`, `1B`) including large percentage deltas.
 
+For a guided tour of the files (what they contain and when to use them), see `docs/report-walkthrough.md`.
+
 Within a run directory:
 
 ## Root (markup)

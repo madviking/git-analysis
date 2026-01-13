@@ -37,6 +37,7 @@ The format is based on Keep a Changelog, and this project follows SemVer where a
 - `exclude_commits` config for excluding specific commit SHAs from stats, plus `csv/top_commits.csv` to help find large commits by churn.
 - Codex skills for report triage and spike investigation under `skills/`.
 - Upload payload weekly rows now include repo-concentration shares (`repo_activity_top1_share_changed`, `repo_activity_top3_share_changed`), plus upload-level nonzero-week counts (`weekly_nonzero_commits_weeks`, `weekly_nonzero_changed_weeks`).
+- Docs: `docs/cli.md`, `docs/troubleshooting.md`, and `docs/report-walkthrough.md`.
 
 ### Changed
 - Upload/publish defaults now persist under `config.json` → `upload_config.*` (backward-compatible read of legacy `publish` block remains).
@@ -52,7 +53,7 @@ The format is based on Keep a Changelog, and this project follows SemVer where a
 - Unless `--include-bootstraps` is set, comparison reports only show the bootstrap-excluding view (no separate bootstraps/including tables).
 - “In review” report naming now reflects non-year periods (e.g. `period_in_review_2025H1_vs_2025H2.*` instead of `year_in_review_...`).
 - README now links directly to `docs/` pages (configuration, output, publishing, payload, development).
-- README includes Web UI screenshots for uploaded stats.
+- README simplified and includes Web UI screenshots for uploaded stats.
 
 ## [0.1.0]
 
